@@ -123,7 +123,7 @@ export function createBalls(): Ball[] {
   for (let row = 0; row < 5; row++) {
     const ballsInRow = row + 1;
     const rowOffsetY = -(row * spacing * Math.sin(Math.PI / 6));
-    const rowX = startX - row * spacing * Math.cos(Math.PI / 6);
+    const rowX = startX + row * spacing * Math.cos(Math.PI / 6);
     for (let col = 0; col < ballsInRow; col++) {
       const x = rowX;
       const y = startY + rowOffsetY + col * spacing;
