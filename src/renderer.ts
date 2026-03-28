@@ -255,7 +255,7 @@ export class Renderer {
     }
 
     bg.lineStyle(2, 0xFFFFFF, 0.15);
-    const headString = TABLE_WIDTH * 0.65;
+    const headString = TABLE_WIDTH * 0.35;
     bg.moveTo(headString, 0);
     bg.lineTo(headString, TABLE_HEIGHT);
 
@@ -263,7 +263,7 @@ export class Renderer {
     bg.drawCircle(TABLE_WIDTH / 2, TABLE_HEIGHT / 2, 4);
     bg.endFill();
     bg.beginFill(0xFFFFFF, 0.2);
-    bg.drawCircle(TABLE_WIDTH * 0.27, TABLE_HEIGHT / 2, 4);
+    bg.drawCircle(TABLE_WIDTH * 0.73, TABLE_HEIGHT / 2, 4);
     bg.endFill();
 
     for (const pocket of pockets) {
