@@ -1,20 +1,13 @@
-import { Vec2, vec2, vecSub, vecLen, vecNorm, vecScale, BALL_RADIUS } from './physics';
+import { Vec2, vec2, vecSub, vecLen, vecNorm, BALL_RADIUS } from './physics';
 import { Renderer } from './renderer';
 
-export interface ShotParams {
-  direction: Vec2;
-  power: number;
-}
-
-export type InputState = 'idle' | 'aiming' | 'spinning' | 'ball_in_hand';
+export type InputState = 'idle' | 'aiming' | 'spinning' | 'panning' | 'gesturing' | 'ball_in_hand';
 
 export class InputHandler {
   private renderer: Renderer;
   private canvas: HTMLCanvasElement;
 
   state: InputState = 'idle';
-  private touchStartPos: Vec2 = vec2(0, 0);
-  private touchCurrentPos: Vec2 = vec2(0, 0);
   private cueBallScreenPos: Vec2 = vec2(0, 0);
 
   aimDirection: Vec2 = vec2(0, -1);
@@ -22,14 +15,18 @@ export class InputHandler {
   spinX: number = 0;
   spinY: number = 0;
 
-  // Callbacks
   onShoot: ((direction: Vec2, power: number) => void) | null = null;
   onAimUpdate: ((direction: Vec2, power: number) => void) | null = null;
   onSpinChange: ((x: number, y: number) => void) | null = null;
   onBallInHandPlace: ((pos: Vec2) => void) | null = null;
 
-  private isAiming = false;
-  private isDraggingSpin = false;
+  // Multi-touch tracking
+  private activeTouches: Map<number, Vec2> = new Map();
+  private lastPinchDist: number = 0;
+  private lastPinchAngle: number = 0;
+  private lastPinchCenter: Vec2 = vec2(0, 0);
+  private isPanning = false;
+  private lastPanPos: Vec2 = vec2(0, 0);
 
   constructor(renderer: Renderer) {
     this.renderer = renderer;
@@ -41,20 +38,40 @@ export class InputHandler {
     this.canvas.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
     this.canvas.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
     this.canvas.addEventListener('touchend', this.onTouchEnd.bind(this), { passive: false });
+    this.canvas.addEventListener('touchcancel', this.onTouchEnd.bind(this), { passive: false });
 
-    // Mouse fallback for testing
-    this.canvas.addEventListener('mousedown', this.onMouseDown.bind(this));
-    this.canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
-    this.canvas.addEventListener('mouseup', this.onMouseUp.bind(this));
+    // Mouse fallback
+    let mouseDown = false;
+    this.canvas.addEventListener('mousedown', (e) => {
+      mouseDown = true;
+      this.handleSingleStart(vec2(e.clientX, e.clientY));
+    });
+    this.canvas.addEventListener('mousemove', (e) => {
+      if (mouseDown) this.handleSingleMove(vec2(e.clientX, e.clientY));
+    });
+    this.canvas.addEventListener('mouseup', (e) => {
+      mouseDown = false;
+      this.handleSingleEnd(vec2(e.clientX, e.clientY));
+    });
+
+    // Mouse wheel for zoom
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      const r = this.renderer;
+      // Zoom toward mouse position
+      const mx = e.clientX;
+      const my = e.clientY;
+      r.camX = mx - (mx - r.camX) * zoomFactor;
+      r.camY = my - (my - r.camY) * zoomFactor;
+      r.camZoom *= zoomFactor;
+      r.camZoom = Math.max(0.02, Math.min(0.5, r.camZoom));
+      r.applyCameraTransform();
+    }, { passive: false });
   }
 
   setCueBallPos(tablePos: Vec2): void {
     this.cueBallScreenPos = this.renderer.tableToScreen(tablePos.x, tablePos.y);
-  }
-
-  private getEventPos(e: TouchEvent): Vec2 {
-    const touch = e.touches[0] || e.changedTouches[0];
-    return vec2(touch.clientX, touch.clientY);
   }
 
   private isTouchOnSpinIndicator(pos: Vec2): boolean {
@@ -66,10 +83,136 @@ export class InputHandler {
 
   private isTouchOnCueBall(pos: Vec2): boolean {
     const dist = vecLen(vecSub(pos, this.cueBallScreenPos));
-    return dist < BALL_RADIUS * this.renderer.scale + 30; // generous touch area
+    const hitRadius = Math.max(30, BALL_RADIUS * this.renderer.camZoom + 20);
+    return dist < hitRadius;
   }
 
-  private handleStart(pos: Vec2): void {
+  // --- Touch events ---
+  private onTouchStart(e: TouchEvent): void {
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      this.activeTouches.set(t.identifier, vec2(t.clientX, t.clientY));
+    }
+
+    const count = this.activeTouches.size;
+
+    if (count === 2) {
+      // Switch to gesture mode (pinch/rotate/pan)
+      this.cancelAiming();
+      this.isPanning = false;
+      this.state = 'gesturing';
+      this.initPinch();
+    } else if (count === 1) {
+      const pos = this.getFirstTouch();
+      this.handleSingleStart(pos);
+    }
+  }
+
+  private onTouchMove(e: TouchEvent): void {
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      this.activeTouches.set(t.identifier, vec2(t.clientX, t.clientY));
+    }
+
+    const count = this.activeTouches.size;
+
+    if (count >= 2 && this.state === 'gesturing') {
+      this.handlePinch();
+    } else if (count === 1) {
+      const pos = this.getFirstTouch();
+      this.handleSingleMove(pos);
+    }
+  }
+
+  private onTouchEnd(e: TouchEvent): void {
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      this.activeTouches.delete(e.changedTouches[i].identifier);
+    }
+
+    if (this.activeTouches.size === 0) {
+      if (this.state === 'aiming') {
+        this.handleSingleEnd(vec2(0, 0));
+      } else if (this.state === 'gesturing' || this.state === 'panning') {
+        this.state = 'idle';
+      } else if (this.state === 'spinning') {
+        this.state = 'idle';
+      }
+      this.isPanning = false;
+    } else if (this.activeTouches.size === 1 && this.state === 'gesturing') {
+      // Went from 2 fingers to 1 — switch to pan
+      this.state = 'panning';
+      this.isPanning = true;
+      this.lastPanPos = this.getFirstTouch();
+    }
+  }
+
+  private getFirstTouch(): Vec2 {
+    const first = this.activeTouches.values().next().value;
+    return first || vec2(0, 0);
+  }
+
+  // --- Pinch/Rotate/Pan (2 fingers) ---
+  private initPinch(): void {
+    const touches = Array.from(this.activeTouches.values());
+    if (touches.length < 2) return;
+    const [a, b] = touches;
+    this.lastPinchDist = vecLen(vecSub(a, b));
+    this.lastPinchAngle = Math.atan2(b.y - a.y, b.x - a.x);
+    this.lastPinchCenter = vec2((a.x + b.x) / 2, (a.y + b.y) / 2);
+  }
+
+  private handlePinch(): void {
+    const touches = Array.from(this.activeTouches.values());
+    if (touches.length < 2) return;
+    const [a, b] = touches;
+
+    const dist = vecLen(vecSub(a, b));
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    const center = vec2((a.x + b.x) / 2, (a.y + b.y) / 2);
+
+    const r = this.renderer;
+
+    // Pan: move camera by center delta
+    const dx = center.x - this.lastPinchCenter.x;
+    const dy = center.y - this.lastPinchCenter.y;
+    r.camX += dx;
+    r.camY += dy;
+
+    // Zoom: scale relative to pinch center
+    if (this.lastPinchDist > 0) {
+      const zoomFactor = dist / this.lastPinchDist;
+      const newZoom = Math.max(0.02, Math.min(0.5, r.camZoom * zoomFactor));
+      const actualFactor = newZoom / r.camZoom;
+
+      r.camX = center.x - (center.x - r.camX) * actualFactor;
+      r.camY = center.y - (center.y - r.camY) * actualFactor;
+      r.camZoom = newZoom;
+    }
+
+    // Rotate relative to pinch center
+    const dAngle = angle - this.lastPinchAngle;
+    if (Math.abs(dAngle) < Math.PI) { // avoid jumps
+      const cos = Math.cos(dAngle);
+      const sin = Math.sin(dAngle);
+      const ox = r.camX - center.x;
+      const oy = r.camY - center.y;
+      r.camX = center.x + ox * cos - oy * sin;
+      r.camY = center.y + ox * sin + oy * cos;
+      r.camRotation += dAngle;
+    }
+
+    r.applyCameraTransform();
+
+    this.lastPinchDist = dist;
+    this.lastPinchAngle = angle;
+    this.lastPinchCenter = center;
+  }
+
+  // --- Single finger ---
+  private handleSingleStart(pos: Vec2): void {
     if (this.state === 'ball_in_hand') {
       const tablePos = this.renderer.screenToTable(pos.x, pos.y);
       this.onBallInHandPlace?.(tablePos);
@@ -78,63 +221,90 @@ export class InputHandler {
 
     if (this.state !== 'idle') return;
 
-    // Check spin indicator first
+    // Check spin indicator
     if (this.isTouchOnSpinIndicator(pos)) {
-      this.isDraggingSpin = true;
+      this.state = 'spinning';
       this.updateSpin(pos);
       return;
     }
 
-    // Check if touching near cue ball
+    // Check cue ball
     if (this.isTouchOnCueBall(pos)) {
-      this.isAiming = true;
-      this.touchStartPos = { ...pos };
-      this.touchCurrentPos = { ...pos };
       this.state = 'aiming';
+      return;
     }
+
+    // Otherwise: pan with 1 finger
+    this.state = 'panning';
+    this.isPanning = true;
+    this.lastPanPos = { ...pos };
   }
 
-  private handleMove(pos: Vec2): void {
-    if (this.isDraggingSpin) {
+  private handleSingleMove(pos: Vec2): void {
+    if (this.state === 'spinning') {
       this.updateSpin(pos);
       return;
     }
 
-    if (!this.isAiming) return;
+    if (this.state === 'panning' && this.isPanning) {
+      const r = this.renderer;
+      r.camX += pos.x - this.lastPanPos.x;
+      r.camY += pos.y - this.lastPanPos.y;
+      r.applyCameraTransform();
+      this.lastPanPos = { ...pos };
+      return;
+    }
 
-    this.touchCurrentPos = { ...pos };
+    if (this.state !== 'aiming') return;
 
-    // Direction: from touch point to cue ball (we're pulling back)
+    // Aiming: direction from touch to cue ball (pulling back)
     const dragVec = vecSub(this.cueBallScreenPos, pos);
     const dragDist = vecLen(dragVec);
 
     if (dragDist > 10) {
-      this.aimDirection = vecNorm(dragVec);
-
-      // Power based on drag distance (max at ~250px drag)
+      // Screen direction -> table direction
+      const screenDir = vecNorm(dragVec);
+      // Rotate screen direction by negative camera rotation to get table direction
+      const cos = Math.cos(-this.renderer.camRotation);
+      const sin = Math.sin(-this.renderer.camRotation);
+      this.aimDirection = vec2(
+        screenDir.x * cos - screenDir.y * sin,
+        screenDir.x * sin + screenDir.y * cos
+      );
       this.power = Math.min(1, dragDist / 250);
-
       this.onAimUpdate?.(this.aimDirection, this.power);
     }
   }
 
-  private handleEnd(_pos: Vec2): void {
-    if (this.isDraggingSpin) {
-      this.isDraggingSpin = false;
+  private handleSingleEnd(_pos: Vec2): void {
+    if (this.state === 'spinning') {
+      this.state = 'idle';
       return;
     }
 
-    if (!this.isAiming) return;
-    this.isAiming = false;
+    if (this.state === 'panning') {
+      this.state = 'idle';
+      this.isPanning = false;
+      return;
+    }
+
+    if (this.state !== 'aiming') return;
 
     if (this.power > 0.02) {
-      // Convert screen direction to table direction
-      const tableDir = this.aimDirection;
-      this.onShoot?.(tableDir, this.power);
+      this.onShoot?.(this.aimDirection, this.power);
     }
 
     this.state = 'idle';
     this.power = 0;
+  }
+
+  private cancelAiming(): void {
+    if (this.state === 'aiming') {
+      this.state = 'idle';
+      this.power = 0;
+      this.renderer.clearAimLine();
+      this.renderer.drawPowerBar(0);
+    }
   }
 
   private updateSpin(pos: Vec2): void {
@@ -145,47 +315,13 @@ export class InputHandler {
 
     let sx = (pos.x - centerX) / maxOffset;
     let sy = (pos.y - centerY) / maxOffset;
-
-    // Clamp to circle
     const len = Math.sqrt(sx * sx + sy * sy);
-    if (len > 1) {
-      sx /= len;
-      sy /= len;
-    }
+    if (len > 1) { sx /= len; sy /= len; }
 
     this.spinX = sx;
     this.spinY = sy;
     this.renderer.updateSpinDot(sx, sy);
     this.onSpinChange?.(sx, sy);
-  }
-
-  // Touch events
-  private onTouchStart(e: TouchEvent): void {
-    e.preventDefault();
-    this.handleStart(this.getEventPos(e));
-  }
-
-  private onTouchMove(e: TouchEvent): void {
-    e.preventDefault();
-    this.handleMove(this.getEventPos(e));
-  }
-
-  private onTouchEnd(e: TouchEvent): void {
-    e.preventDefault();
-    this.handleEnd(this.getEventPos(e));
-  }
-
-  // Mouse events
-  private onMouseDown(e: MouseEvent): void {
-    this.handleStart(vec2(e.clientX, e.clientY));
-  }
-
-  private onMouseMove(e: MouseEvent): void {
-    this.handleMove(vec2(e.clientX, e.clientY));
-  }
-
-  private onMouseUp(e: MouseEvent): void {
-    this.handleEnd(vec2(e.clientX, e.clientY));
   }
 
   enableBallInHand(): void {
@@ -194,8 +330,7 @@ export class InputHandler {
 
   resetToIdle(): void {
     this.state = 'idle';
-    this.isAiming = false;
-    this.isDraggingSpin = false;
+    this.isPanning = false;
     this.power = 0;
   }
 }
