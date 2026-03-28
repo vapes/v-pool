@@ -1,21 +1,23 @@
 import * as PIXI from 'pixi.js';
 import {
-  Ball, Pocket, Vec2, TABLE_WIDTH, TABLE_HEIGHT, BALL_RADIUS, POCKET_RADIUS,
-  vec2, vecLen
+  Ball, Pocket, Vec2, TABLE_WIDTH, TABLE_HEIGHT, BALL_RADIUS,
+  vec2, vecLen, TrajectoryResult
 } from './physics';
 
-const TABLE_COLOR = 0x1B5E20;       // Dark green cloth
-const TABLE_BORDER_COLOR = 0x4E342E; // Dark wood
-const CUSHION_COLOR = 0x2E7D32;      // Slightly lighter green
-const CUE_BALL_COLOR = 0xFFF9C4;     // Yellowish ivory
-const BALL_COLOR = 0xFAFAFA;         // White for Russian billiards
+const TABLE_COLOR = 0x1B5E20;
+const TABLE_BORDER_COLOR = 0x4E342E;
+const CUSHION_COLOR = 0x2E7D32;
+const CUE_BALL_COLOR = 0xFFF9C4;
+const BALL_COLOR = 0xFAFAFA;
 const POCKET_COLOR = 0x111111;
 const AIM_LINE_COLOR = 0xFFFFFF;
 const POWER_BAR_BG = 0x333333;
-const POWER_BAR_FILL = 0xFF5722;
 
 export class Renderer {
   app: PIXI.Application;
+  // viewContainer holds camera transforms (pan/zoom/rotate)
+  viewContainer: PIXI.Container;
+  // tableContainer holds table + balls in physics coords
   tableContainer: PIXI.Container;
   ballGraphics: Map<number, PIXI.Container> = new Map();
   aimLine: PIXI.Graphics;
@@ -27,16 +29,23 @@ export class Renderer {
   messageText: PIXI.Text;
   scoreText: PIXI.Text;
   turnText: PIXI.Text;
+  pocketedContainer: PIXI.Container;
+  shotButtonsContainer: PIXI.Container;
+  private shootBtnBounds = { x: 0, y: 0, w: 0, h: 0 };
+  private cancelBtnBounds = { x: 0, y: 0, w: 0, h: 0 };
 
-  scale: number = 1;
-  offsetX: number = 0;
-  offsetY: number = 0;
+  // Camera state
+  camX: number = 0;
+  camY: number = 0;
+  camZoom: number = 1;
+  camRotation: number = 0;
 
-  private screenW: number = 0;
-  private screenH: number = 0;
+  screenW: number = 0;
+  screenH: number = 0;
 
   constructor() {
     this.app = null!;
+    this.viewContainer = new PIXI.Container();
     this.tableContainer = new PIXI.Container();
     this.aimLine = new PIXI.Graphics();
     this.powerBar = new PIXI.Graphics();
@@ -47,6 +56,8 @@ export class Renderer {
     this.messageText = new PIXI.Text('', { fontSize: 24, fill: 0xffffff, fontFamily: 'Arial' });
     this.scoreText = new PIXI.Text('', { fontSize: 18, fill: 0xffffff, fontFamily: 'Arial' });
     this.turnText = new PIXI.Text('', { fontSize: 16, fill: 0xCCCCCC, fontFamily: 'Arial' });
+    this.pocketedContainer = new PIXI.Container();
+    this.shotButtonsContainer = new PIXI.Container();
   }
 
   async init(): Promise<void> {
@@ -64,63 +75,83 @@ export class Renderer {
 
     document.body.appendChild(this.app.view as HTMLCanvasElement);
 
-    this.calculateScale();
-
-    this.app.stage.addChild(this.tableContainer);
+    // viewContainer at center of screen, holds tableContainer
+    this.viewContainer.addChild(this.tableContainer);
     this.tableContainer.addChild(this.aimLine);
+    this.app.stage.addChild(this.viewContainer);
 
-    // UI layer on top
+    // UI layer on top (not affected by camera)
     this.app.stage.addChild(this.uiContainer);
     this.uiContainer.addChild(this.powerBar);
 
-    // Spin indicator
     this.setupSpinIndicator();
 
-    // Message text (center screen)
     this.messageText.anchor.set(0.5);
     this.messageText.position.set(this.screenW / 2, this.screenH - 60);
     this.uiContainer.addChild(this.messageText);
 
-    // Score text
     this.scoreText.position.set(10, 10);
     this.uiContainer.addChild(this.scoreText);
 
-    // Turn text
     this.turnText.anchor.set(1, 0);
     this.turnText.position.set(this.screenW - 10, 10);
     this.uiContainer.addChild(this.turnText);
 
+    this.uiContainer.addChild(this.pocketedContainer);
+    this.shotButtonsContainer.visible = false;
+    this.uiContainer.addChild(this.shotButtonsContainer);
+
+    // Fit table to screen initially (rotated for portrait)
+    this.fitTableToScreen();
+    this.applyCameraTransform();
+
     window.addEventListener('resize', () => this.onResize());
   }
 
-  private calculateScale(): void {
-    // Portrait mode: table is vertical
-    // Leave space for UI elements at bottom
-    const uiSpace = 180;
-    const padding = 30;
+  private fitTableToScreen(): void {
+    const uiSpace = 140;
+    const padding = 15;
     const availW = this.screenW - padding * 2;
     const availH = this.screenH - padding * 2 - uiSpace;
 
-    // Table in portrait: width maps to screen width, height maps to screen height
-    const scaleX = availW / TABLE_WIDTH;
-    const scaleY = availH / TABLE_HEIGHT;
-    this.scale = Math.min(scaleX, scaleY);
+    // Rotated -90°: table width(3550) becomes visual height, table height(1775) becomes visual width
+    const scaleX = availW / TABLE_HEIGHT;
+    const scaleY = availH / TABLE_WIDTH;
+    this.camZoom = Math.min(scaleX, scaleY);
+    this.camRotation = -Math.PI / 2;
 
-    // Center the table
-    const tableDisplayW = TABLE_WIDTH * this.scale;
-    const tableDisplayH = TABLE_HEIGHT * this.scale;
-    this.offsetX = (this.screenW - tableDisplayW) / 2;
-    this.offsetY = padding;
+    // Center of table in table coords
+    const tableCX = TABLE_WIDTH / 2;
+    const tableCY = TABLE_HEIGHT / 2;
 
-    this.tableContainer.position.set(this.offsetX, this.offsetY);
-    this.tableContainer.scale.set(this.scale);
+    // After rotation, center of table should map to center of available area
+    const screenCX = this.screenW / 2;
+    const screenCY = padding + availH / 2;
+
+    // The viewContainer pivot is at (0,0). We position it so that the table center
+    // ends up at screen center.
+    // Rotated table center: rotate (tableCX, tableCY) by camRotation
+    const cos = Math.cos(this.camRotation);
+    const sin = Math.sin(this.camRotation);
+    const rotCX = tableCX * cos - tableCY * sin;
+    const rotCY = tableCX * sin + tableCY * cos;
+
+    this.camX = screenCX - rotCX * this.camZoom;
+    this.camY = screenCY - rotCY * this.camZoom;
+  }
+
+  applyCameraTransform(): void {
+    this.viewContainer.position.set(this.camX, this.camY);
+    this.viewContainer.scale.set(this.camZoom);
+    this.viewContainer.rotation = this.camRotation;
   }
 
   private onResize(): void {
     this.screenW = window.innerWidth;
     this.screenH = window.innerHeight;
     this.app.renderer.resize(this.screenW, this.screenH);
-    this.calculateScale();
+    this.fitTableToScreen();
+    this.applyCameraTransform();
     this.repositionUI();
   }
 
@@ -140,23 +171,19 @@ export class Renderer {
     const spinY = this.screenH - spinSize - 100;
     this.spinIndicator.position.set(spinX, spinY);
 
-    // Background circle (ball representation)
     this.spinBg = new PIXI.Graphics();
     this.spinBg.beginFill(0x555555, 0.8);
     this.spinBg.drawCircle(spinSize / 2, spinSize / 2, spinSize / 2);
     this.spinBg.endFill();
-    // Cross lines
     this.spinBg.lineStyle(1, 0x888888, 0.5);
     this.spinBg.moveTo(spinSize / 2, 0);
     this.spinBg.lineTo(spinSize / 2, spinSize);
     this.spinBg.moveTo(0, spinSize / 2);
     this.spinBg.lineTo(spinSize, spinSize / 2);
-    // Outer ring
     this.spinBg.lineStyle(2, 0xAAAAAA, 0.8);
     this.spinBg.drawCircle(spinSize / 2, spinSize / 2, spinSize / 2);
     this.spinIndicator.addChild(this.spinBg);
 
-    // Spin dot (shows where cue hits)
     this.spinDot = new PIXI.Graphics();
     this.spinDot.beginFill(0xFF5722);
     this.spinDot.drawCircle(0, 0, 6);
@@ -164,11 +191,8 @@ export class Renderer {
     this.spinDot.position.set(spinSize / 2, spinSize / 2);
     this.spinIndicator.addChild(this.spinDot);
 
-    // Label
     const label = new PIXI.Text('Винт', {
-      fontSize: 12,
-      fill: 0xAAAAAA,
-      fontFamily: 'Arial',
+      fontSize: 12, fill: 0xAAAAAA, fontFamily: 'Arial',
     });
     label.anchor.set(0.5, 0);
     label.position.set(spinSize / 2, spinSize + 5);
@@ -177,95 +201,87 @@ export class Renderer {
     this.uiContainer.addChild(this.spinIndicator);
   }
 
-  // Convert screen coordinates to table coordinates
+  // Screen coords -> table coords (accounting for camera pan/zoom/rotation)
   screenToTable(screenX: number, screenY: number): Vec2 {
-    const x = (screenX - this.offsetX) / this.scale;
-    const y = (screenY - this.offsetY) / this.scale;
-    return vec2(x, y);
+    // Undo position
+    let x = screenX - this.camX;
+    let y = screenY - this.camY;
+    // Undo scale
+    x /= this.camZoom;
+    y /= this.camZoom;
+    // Undo rotation
+    const cos = Math.cos(-this.camRotation);
+    const sin = Math.sin(-this.camRotation);
+    const tx = x * cos - y * sin;
+    const ty = x * sin + y * cos;
+    return vec2(tx, ty);
   }
 
-  // Convert table coordinates to screen coordinates
+  // Table coords -> screen coords
   tableToScreen(tableX: number, tableY: number): Vec2 {
-    const x = tableX * this.scale + this.offsetX;
-    const y = tableY * this.scale + this.offsetY;
-    return vec2(x, y);
+    // Apply rotation
+    const cos = Math.cos(this.camRotation);
+    const sin = Math.sin(this.camRotation);
+    const rx = tableX * cos - tableY * sin;
+    const ry = tableX * sin + tableY * cos;
+    // Apply scale + position
+    return vec2(rx * this.camZoom + this.camX, ry * this.camZoom + this.camY);
   }
 
   drawTable(pockets: Pocket[]): void {
-    // Draw once as a static background
     const bg = new PIXI.Graphics();
 
-    // Outer wood border
     const borderWidth = 50;
     bg.beginFill(TABLE_BORDER_COLOR);
     bg.drawRoundedRect(
       -borderWidth, -borderWidth,
-      TABLE_WIDTH + borderWidth * 2, TABLE_HEIGHT + borderWidth * 2,
-      15
+      TABLE_WIDTH + borderWidth * 2, TABLE_HEIGHT + borderWidth * 2, 15
     );
     bg.endFill();
 
-    // Cushion rails
     const railWidth = 30;
     bg.beginFill(CUSHION_COLOR);
     bg.drawRect(-railWidth, -railWidth, TABLE_WIDTH + railWidth * 2, TABLE_HEIGHT + railWidth * 2);
     bg.endFill();
 
-    // Playing surface
     bg.beginFill(TABLE_COLOR);
     bg.drawRect(0, 0, TABLE_WIDTH, TABLE_HEIGHT);
     bg.endFill();
 
-    // Cloth texture lines (subtle)
     bg.lineStyle(1, 0x1A6B1E, 0.15);
     for (let y = 0; y < TABLE_HEIGHT; y += 40) {
       bg.moveTo(0, y);
       bg.lineTo(TABLE_WIDTH, y);
     }
 
-    // Head string line (where cue ball is placed)
     bg.lineStyle(2, 0xFFFFFF, 0.15);
     const headString = TABLE_HEIGHT * 0.65;
     bg.moveTo(0, headString);
     bg.lineTo(TABLE_WIDTH, headString);
 
-    // Center spot
     bg.beginFill(0xFFFFFF, 0.2);
     bg.drawCircle(TABLE_WIDTH / 2, TABLE_HEIGHT / 2, 4);
     bg.endFill();
-
-    // Foot spot
     bg.beginFill(0xFFFFFF, 0.2);
     bg.drawCircle(TABLE_WIDTH / 2, TABLE_HEIGHT * 0.27, 4);
     bg.endFill();
 
-    // Pockets
     for (const pocket of pockets) {
       bg.beginFill(POCKET_COLOR);
       bg.drawCircle(pocket.pos.x, pocket.pos.y, pocket.radius + 5);
       bg.endFill();
-      // Inner pocket shadow
       bg.beginFill(0x000000, 0.8);
       bg.drawCircle(pocket.pos.x, pocket.pos.y, pocket.radius);
       bg.endFill();
     }
 
-    // Diamond markers on rails
     bg.beginFill(0xF5F5DC, 0.6);
-    // Top rail diamonds
     for (let i = 1; i < 8; i++) {
       bg.drawCircle(TABLE_WIDTH * i / 8, -railWidth / 2, 4);
-    }
-    // Bottom rail diamonds
-    for (let i = 1; i < 8; i++) {
       bg.drawCircle(TABLE_WIDTH * i / 8, TABLE_HEIGHT + railWidth / 2, 4);
     }
-    // Left rail diamonds
     for (let i = 1; i < 4; i++) {
       bg.drawCircle(-railWidth / 2, TABLE_HEIGHT * i / 4, 4);
-    }
-    // Right rail diamonds
-    for (let i = 1; i < 4; i++) {
       bg.drawCircle(TABLE_WIDTH + railWidth / 2, TABLE_HEIGHT * i / 4, 4);
     }
     bg.endFill();
@@ -277,30 +293,25 @@ export class Renderer {
     for (const ball of balls) {
       const container = new PIXI.Container();
 
-      // Ball shadow
       const shadow = new PIXI.Graphics();
       shadow.beginFill(0x000000, 0.3);
       shadow.drawEllipse(3, 3, ball.radius * 0.95, ball.radius * 0.85);
       shadow.endFill();
       container.addChild(shadow);
 
-      // Ball body
       const gfx = new PIXI.Graphics();
       const color = ball.isCue ? CUE_BALL_COLOR : BALL_COLOR;
       gfx.beginFill(color);
       gfx.drawCircle(0, 0, ball.radius);
       gfx.endFill();
 
-      // Highlight (3D effect)
       const highlight = new PIXI.Graphics();
       highlight.beginFill(0xFFFFFF, 0.4);
       highlight.drawEllipse(-ball.radius * 0.3, -ball.radius * 0.3, ball.radius * 0.35, ball.radius * 0.3);
       highlight.endFill();
       gfx.addChild(highlight);
-
       container.addChild(gfx);
 
-      // Number text for non-cue balls
       if (!ball.isCue) {
         const numText = new PIXI.Text(ball.id.toString(), {
           fontSize: ball.radius * 0.9,
@@ -322,64 +333,84 @@ export class Renderer {
     for (const ball of balls) {
       const gfx = this.ballGraphics.get(ball.id);
       if (!gfx) continue;
-
-      if (ball.isPocketed) {
-        gfx.visible = false;
-        continue;
-      }
-
+      if (ball.isPocketed) { gfx.visible = false; continue; }
       gfx.visible = true;
       gfx.position.set(ball.pos.x, ball.pos.y);
     }
   }
 
-  drawAimLine(points: Vec2[], power: number): void {
+  drawAimLine(traj: TrajectoryResult, power: number): void {
     this.aimLine.clear();
-    if (points.length < 2) return;
 
-    // Main aim line (fading)
-    const maxAlpha = Math.min(0.8, power * 1.5);
-    for (let i = 0; i < points.length - 1; i++) {
-      const alpha = maxAlpha * (1 - i / points.length);
-      const width = Math.max(1, 3 - (i / points.length) * 2);
+    const px = 1 / this.camZoom; // 1 screen pixel in table units
+    const w = px * 2; // consistent thin line
+    const alpha = Math.max(0.5, Math.min(0.9, power * 2));
 
-      if (i >= points.length - 3 && points.length > 5) {
-        // Last segment (object ball prediction) - different color
-        this.aimLine.lineStyle(width, 0xFFAA00, alpha * 0.7);
-      } else {
-        this.aimLine.lineStyle(width, AIM_LINE_COLOR, alpha);
+    // Cue ball path — white dashed
+    const cp = traj.cuePath;
+    if (cp.length >= 2) {
+      this.aimLine.lineStyle(w, AIM_LINE_COLOR, alpha);
+      this.aimLine.moveTo(cp[0].x, cp[0].y);
+      for (let i = 1; i < cp.length; i++) {
+        // Dashed: draw 2 segments, skip 1
+        if (i % 3 !== 0) {
+          this.aimLine.lineTo(cp[i].x, cp[i].y);
+        } else {
+          this.aimLine.moveTo(cp[i].x, cp[i].y);
+        }
       }
+    }
 
-      // Dashed line effect
-      if (i % 3 !== 2) {
-        this.aimLine.moveTo(points[i].x, points[i].y);
-        this.aimLine.lineTo(points[i + 1].x, points[i + 1].y);
+    // Object ball direction — orange solid
+    if (traj.objectBallDir.length === 2) {
+      const [from, to] = traj.objectBallDir;
+      this.aimLine.lineStyle(w, 0xFFAA00, alpha * 0.9);
+      this.aimLine.moveTo(from.x, from.y);
+      this.aimLine.lineTo(to.x, to.y);
+      // Small circle at object ball contact
+      this.aimLine.lineStyle(w, 0xFFAA00, alpha);
+      this.aimLine.drawCircle(from.x, from.y, BALL_RADIUS);
+    }
+
+    // Cue ball deflection after hit — white dotted, fainter
+    if (traj.cueDeflection.length === 2) {
+      const [from, to] = traj.cueDeflection;
+      this.aimLine.lineStyle(w, AIM_LINE_COLOR, alpha * 0.5);
+      // Dotted pattern
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const dotSpacing = px * 8;
+      const dots = Math.floor(len / dotSpacing);
+      for (let i = 0; i < dots; i++) {
+        const t = i / dots;
+        const x = from.x + dx * t;
+        const y = from.y + dy * t;
+        if (i % 2 === 0) {
+          this.aimLine.moveTo(x, y);
+        } else {
+          this.aimLine.lineTo(x, y);
+        }
       }
     }
   }
 
-  clearAimLine(): void {
-    this.aimLine.clear();
-  }
+  clearAimLine(): void { this.aimLine.clear(); }
 
   drawPowerBar(power: number): void {
     this.powerBar.clear();
     if (power <= 0) return;
-
     const barWidth = 20;
     const barHeight = 200;
     const x = 20;
     const y = this.screenH - barHeight - 100;
 
-    // Background
     this.powerBar.beginFill(POWER_BAR_BG, 0.7);
     this.powerBar.drawRoundedRect(x, y, barWidth, barHeight, 5);
     this.powerBar.endFill();
 
-    // Fill (gradient from green to red)
     const fillHeight = barHeight * power;
     const fillY = y + barHeight - fillHeight;
-
     let fillColor: number;
     if (power < 0.33) fillColor = 0x4CAF50;
     else if (power < 0.66) fillColor = 0xFFC107;
@@ -389,14 +420,8 @@ export class Renderer {
     this.powerBar.drawRoundedRect(x, fillY, barWidth, fillHeight, 5);
     this.powerBar.endFill();
 
-    // Border
     this.powerBar.lineStyle(2, 0xAAAAAA, 0.5);
     this.powerBar.drawRoundedRect(x, y, barWidth, barHeight, 5);
-
-    // Power percentage text
-    const pct = Math.round(power * 100);
-    this.powerBar.lineStyle(0);
-    // Small ticks
     for (let i = 0; i <= 4; i++) {
       const tickY = y + (barHeight * i) / 4;
       this.powerBar.lineStyle(1, 0xAAAAAA, 0.5);
@@ -423,17 +448,130 @@ export class Renderer {
     this.messageText.text = text;
     this.messageText.alpha = 1;
     if (duration > 0) {
-      setTimeout(() => {
-        this.messageText.alpha = 0;
-      }, duration);
+      setTimeout(() => { this.messageText.alpha = 0; }, duration);
     }
   }
 
-  updateScore(player1: number, player2: number): void {
-    this.scoreText.text = `Игрок 1: ${player1}  |  Игрок 2: ${player2}`;
+  updatePocketed(p1Balls: number[], p2Balls: number[]): void {
+    this.pocketedContainer.removeChildren();
+    const ballR = 10;
+    const startY = this.screenH - 40;
+    const gap = ballR * 2.4;
+
+    // Player 1 — left side
+    const p1Label = new PIXI.Text(`Игрок 1: ${p1Balls.length}`, {
+      fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
+    });
+    p1Label.position.set(10, startY - 22);
+    this.pocketedContainer.addChild(p1Label);
+
+    for (let i = 0; i < p1Balls.length; i++) {
+      const g = new PIXI.Graphics();
+      g.beginFill(0xFAFAFA);
+      g.drawCircle(0, 0, ballR);
+      g.endFill();
+      const num = new PIXI.Text(p1Balls[i].toString(), {
+        fontSize: 10, fill: 0x333333, fontWeight: 'bold', fontFamily: 'Arial',
+      });
+      num.anchor.set(0.5);
+      g.addChild(num);
+      g.position.set(15 + i * gap, startY);
+      this.pocketedContainer.addChild(g);
+    }
+
+    // Player 2 — right side
+    const p2Label = new PIXI.Text(`Игрок 2: ${p2Balls.length}`, {
+      fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
+    });
+    p2Label.anchor.set(1, 0);
+    p2Label.position.set(this.screenW - 10, startY - 22);
+    this.pocketedContainer.addChild(p2Label);
+
+    for (let i = 0; i < p2Balls.length; i++) {
+      const g = new PIXI.Graphics();
+      g.beginFill(0xFAFAFA);
+      g.drawCircle(0, 0, ballR);
+      g.endFill();
+      const num = new PIXI.Text(p2Balls[i].toString(), {
+        fontSize: 10, fill: 0x333333, fontWeight: 'bold', fontFamily: 'Arial',
+      });
+      num.anchor.set(0.5);
+      g.addChild(num);
+      g.position.set(this.screenW - 15 - i * gap, startY);
+      this.pocketedContainer.addChild(g);
+    }
   }
 
-  updateTurn(playerNum: number): void {
-    this.turnText.text = `Ход: Игрок ${playerNum}`;
+  showShotButtons(): void {
+    this.shotButtonsContainer.removeChildren();
+
+    const btnW = 120;
+    const btnH = 50;
+    const gap = 20;
+    const totalW = btnW * 2 + gap;
+    const x0 = (this.screenW - totalW) / 2;
+    const y0 = this.screenH - 70;
+
+    // Shoot button (green)
+    const shootBtn = new PIXI.Graphics();
+    shootBtn.beginFill(0x2E7D32, 0.9);
+    shootBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    shootBtn.endFill();
+    shootBtn.lineStyle(2, 0x4CAF50);
+    shootBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    shootBtn.position.set(x0, y0);
+    const shootLabel = new PIXI.Text('Удар', {
+      fontSize: 22, fill: 0xFFFFFF, fontFamily: 'Arial', fontWeight: 'bold',
+    });
+    shootLabel.anchor.set(0.5);
+    shootLabel.position.set(x0 + btnW / 2, y0 + btnH / 2);
+    this.shotButtonsContainer.addChild(shootBtn, shootLabel);
+    this.shootBtnBounds = { x: x0, y: y0, w: btnW, h: btnH };
+
+    // Cancel button (red)
+    const cancelBtn = new PIXI.Graphics();
+    cancelBtn.beginFill(0xC62828, 0.9);
+    cancelBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    cancelBtn.endFill();
+    cancelBtn.lineStyle(2, 0xEF5350);
+    cancelBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    const cx = x0 + btnW + gap;
+    cancelBtn.position.set(cx, y0);
+    const cancelLabel = new PIXI.Text('Отмена', {
+      fontSize: 22, fill: 0xFFFFFF, fontFamily: 'Arial', fontWeight: 'bold',
+    });
+    cancelLabel.anchor.set(0.5);
+    cancelLabel.position.set(cx + btnW / 2, y0 + btnH / 2);
+    this.shotButtonsContainer.addChild(cancelBtn, cancelLabel);
+    this.cancelBtnBounds = { x: cx, y: y0, w: btnW, h: btnH };
+
+    this.shotButtonsContainer.visible = true;
+  }
+
+  hideShotButtons(): void {
+    this.shotButtonsContainer.visible = false;
+    this.shotButtonsContainer.removeChildren();
+  }
+
+  getShotButtonAt(pos: Vec2): 'shoot' | 'cancel' | null {
+    if (!this.shotButtonsContainer.visible) return null;
+    const s = this.shootBtnBounds;
+    if (pos.x >= s.x && pos.x <= s.x + s.w && pos.y >= s.y && pos.y <= s.y + s.h) {
+      return 'shoot';
+    }
+    const c = this.cancelBtnBounds;
+    if (pos.x >= c.x && pos.x <= c.x + c.w && pos.y >= c.y && pos.y <= c.y + c.h) {
+      return 'cancel';
+    }
+    return null;
+  }
+
+  updateTurn(n: number): void {
+    this.turnText.text = `Ход: Игрок ${n}`;
+  }
+
+  resetView(): void {
+    this.fitTableToScreen();
+    this.applyCameraTransform();
   }
 }

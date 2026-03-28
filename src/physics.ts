@@ -63,13 +63,15 @@ export const CUSHION_RESTITUTION = 0.75;
 // Ball-ball restitution
 export const BALL_RESTITUTION = 0.95;
 
-// Friction coefficients
-export const ROLLING_FRICTION = 0.01;    // cloth friction (deceleration)
-export const SLIDING_FRICTION = 0.2;     // sliding friction coefficient
-export const SPIN_DECAY = 0.985;          // spin decay per frame
+// Friction: deceleration in velocity-units per frame
+// At max power ball should roll ~4-5 seconds (240-300 frames)
+export const FRICTION_DECEL = 0.15;
+export const SPIN_DECAY = 0.985;
 
 // Maximum shot power (velocity in mm/frame at 60fps)
-export const MAX_SHOT_POWER = 45;
+// Real break shot: ~8-10 m/s = 480-600 mm/s ÷ 60fps = 8-10 mm/frame
+// But we use higher value for game feel on a 3550mm table
+export const MAX_SHOT_POWER = 200;
 
 export interface Ball {
   id: number;
@@ -161,8 +163,8 @@ export function shootCueBall(ball: Ball, direction: Vec2, power: number, spin: S
 
   // Apply spin - side spin affects angular velocity
   // top/back spin affects forward roll
-  ball.spin = vec2(spin.x * power * 15, spin.y * power * 15);
-  ball.angularVel = vec2(spin.x * power * 8, spin.y * power * 8);
+  ball.spin = vec2(spin.x * power * 40, spin.y * power * 40);
+  ball.angularVel = vec2(spin.x * power * 20, spin.y * power * 20);
 }
 
 export function isMoving(balls: Ball[]): boolean {
@@ -173,13 +175,20 @@ export function isMoving(balls: Ball[]): boolean {
   return false;
 }
 
+export interface TrajectoryResult {
+  cuePath: Vec2[];           // cue ball path until collision
+  objectBallDir: Vec2[];     // [contact point, end point] of object ball
+  cueDeflection: Vec2[];     // cue ball path after collision
+}
+
 export class PhysicsEngine {
   balls: Ball[];
   pockets: Pocket[];
   pocketedThisTurn: number[] = [];
   firstHitBallId: number = -1;
   cushionHits: number = 0;
-  private substeps = 4;
+  activeBallId: number = 0; // which ball is being struck (any ball in Russian billiards)
+  private substeps = 8;
 
   constructor(balls: Ball[], pockets: Pocket[]) {
     this.balls = balls;
@@ -223,14 +232,11 @@ export class PhysicsEngine {
         ball.vel.y += velDir.y * spinTransfer;
       }
 
-      // Friction - different for sliding vs rolling
+      // Friction
       if (speed > 0.1) {
-        // Deceleration from cloth friction
-        const frictionDecel = ROLLING_FRICTION * 9800 * dt; // g in mm/s^2
+        const frictionDecel = FRICTION_DECEL * dt;
         const newSpeed = Math.max(0, speed - frictionDecel);
-        if (speed > 0) {
-          ball.vel = vecScale(vecNorm(ball.vel), newSpeed);
-        }
+        ball.vel = vecScale(vecNorm(ball.vel), newSpeed);
       } else {
         ball.vel = vec2(0, 0);
       }
@@ -263,10 +269,10 @@ export class PhysicsEngine {
         const minDist = a.radius + b.radius;
 
         if (dist < minDist) {
-          // Track first hit for cue ball
+          // Track first hit for the active (struck) ball
           if (this.firstHitBallId === -1) {
-            if (a.isCue) this.firstHitBallId = b.id;
-            else if (b.isCue) this.firstHitBallId = a.id;
+            if (a.id === this.activeBallId) this.firstHitBallId = b.id;
+            else if (b.id === this.activeBallId) this.firstHitBallId = a.id;
           }
 
           // Separate overlapping balls
@@ -288,11 +294,11 @@ export class PhysicsEngine {
             b.vel = vecAdd(b.vel, vecScale(impulseVec, 1 / b.mass));
 
             // Transfer some spin on collision (throw effect)
-            if (a.isCue && vecLen(a.spin) > 0.1) {
+            if (a.id === this.activeBallId && vecLen(a.spin) > 0.1) {
               const spinTransfer = 0.3;
               b.spin = vecAdd(b.spin, vecScale(a.spin, spinTransfer));
               a.spin = vecScale(a.spin, 1 - spinTransfer);
-            } else if (b.isCue && vecLen(b.spin) > 0.1) {
+            } else if (b.id === this.activeBallId && vecLen(b.spin) > 0.1) {
               const spinTransfer = 0.3;
               a.spin = vecAdd(a.spin, vecScale(b.spin, spinTransfer));
               b.spin = vecScale(b.spin, 1 - spinTransfer);
@@ -384,34 +390,45 @@ export class PhysicsEngine {
   }
 
   // Predict trajectory for aim line
-  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 150): Vec2[] {
-    const points: Vec2[] = [{ ...startPos }];
+  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 200, skipBallId: number = 0): TrajectoryResult {
+    const cuePath: Vec2[] = [{ ...startPos }];
     const vel = vecScale(direction, power * MAX_SHOT_POWER);
     let pos = { ...startPos };
     let currentVel = { ...vel };
+    const stepDt = 0.125;
+
+    let objectBallDir: Vec2[] = [];
+    let cueDeflection: Vec2[] = [];
 
     for (let i = 0; i < maxSteps; i++) {
-      pos = vecAdd(pos, vecScale(currentVel, 0.25));
+      pos = vecAdd(pos, vecScale(currentVel, stepDt));
 
       // Check ball collision
-      let hitBall = false;
       for (const ball of this.balls) {
-        if (ball.isPocketed || ball.isCue) continue;
+        if (ball.isPocketed || ball.id === skipBallId) continue;
         if (vecDist(pos, ball.pos) < BALL_RADIUS * 2) {
-          points.push({ ...pos });
-          hitBall = true;
-
-          // Calculate reflection for ghost ball trajectory
+          // Contact point: position the cue ball just touching the object ball
           const normal = vecNorm(vecSub(pos, ball.pos));
-          const targetDir = vecScale(normal, -1);
-          // Show where the object ball would go
-          const objBallEnd = vecAdd(ball.pos, vecScale(targetDir, 80));
-          points.push({ ...ball.pos });
-          points.push(objBallEnd);
-          return points;
+          const contactPos = vecAdd(ball.pos, vecScale(normal, BALL_RADIUS * 2));
+          cuePath.push(contactPos);
+
+          // Object ball goes in the direction from cue ball to object ball center
+          const hitDir = vecNorm(vecSub(ball.pos, contactPos));
+          const objSpeed = vecDot(currentVel, hitDir) * BALL_RESTITUTION;
+          const objVel = vecScale(hitDir, objSpeed);
+          const objEnd = vecAdd(ball.pos, vecScale(vecNorm(objVel), 300));
+          objectBallDir = [{ ...ball.pos }, objEnd];
+
+          // Cue ball deflects: subtract the component transferred to object ball
+          const cueAfter = vecSub(currentVel, vecScale(hitDir, vecDot(currentVel, hitDir)));
+          if (vecLen(cueAfter) > 0.5) {
+            const deflEnd = vecAdd(contactPos, vecScale(vecNorm(cueAfter), 200));
+            cueDeflection = [{ ...contactPos }, deflEnd];
+          }
+
+          return { cuePath, objectBallDir, cueDeflection };
         }
       }
-      if (hitBall) break;
 
       // Check cushion bounce
       if (pos.x - BALL_RADIUS < 0 || pos.x + BALL_RADIUS > TABLE_WIDTH) {
@@ -425,17 +442,17 @@ export class PhysicsEngine {
 
       // Friction
       const speed = vecLen(currentVel);
-      if (speed > 0.5) {
-        const friction = ROLLING_FRICTION * 9800 * 0.25;
-        const newSpeed = Math.max(0, speed - friction);
+      if (speed > 0.3) {
+        const frictionDecel = FRICTION_DECEL * stepDt;
+        const newSpeed = Math.max(0, speed - frictionDecel);
         currentVel = vecScale(vecNorm(currentVel), newSpeed);
       } else {
         break;
       }
 
-      points.push({ ...pos });
+      cuePath.push({ ...pos });
     }
 
-    return points;
+    return { cuePath, objectBallDir, cueDeflection };
   }
 }
