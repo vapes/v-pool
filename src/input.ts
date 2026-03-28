@@ -32,6 +32,9 @@ export class InputHandler {
   private lastPanPos: Vec2 = vec2(0, 0);
   private prevState: InputState = 'idle';
   private isDraggingPowerBar = false;
+  private boundTouchStart!: (e: TouchEvent) => void;
+  private boundTouchMove!: (e: TouchEvent) => void;
+  private boundTouchEnd!: (e: TouchEvent) => void;
 
   constructor(renderer: Renderer) {
     this.renderer = renderer;
@@ -40,10 +43,13 @@ export class InputHandler {
   }
 
   private setupEvents(): void {
-    this.canvas.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
-    this.canvas.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
-    this.canvas.addEventListener('touchend', this.onTouchEnd.bind(this), { passive: false });
-    this.canvas.addEventListener('touchcancel', this.onTouchEnd.bind(this), { passive: false });
+    this.boundTouchStart = this.onTouchStart.bind(this);
+    this.boundTouchMove = this.onTouchMove.bind(this);
+    this.boundTouchEnd = this.onTouchEnd.bind(this);
+    this.canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
+    this.canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
+    this.canvas.addEventListener('touchend', this.boundTouchEnd, { passive: false });
+    this.canvas.addEventListener('touchcancel', this.boundTouchEnd, { passive: false });
 
     // Mouse fallback
     let mouseDown = false;
@@ -439,5 +445,12 @@ export class InputHandler {
     this.state = 'idle';
     this.isPanning = false;
     this.power = 0;
+  }
+
+  destroy(): void {
+    this.canvas.removeEventListener('touchstart', this.boundTouchStart);
+    this.canvas.removeEventListener('touchmove', this.boundTouchMove);
+    this.canvas.removeEventListener('touchend', this.boundTouchEnd);
+    this.canvas.removeEventListener('touchcancel', this.boundTouchEnd);
   }
 }

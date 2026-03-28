@@ -33,6 +33,9 @@ export class Renderer {
   shotButtonsContainer: PIXI.Container;
   private shootBtnBounds = { x: 0, y: 0, w: 0, h: 0 };
 
+  menuContainer: PIXI.Container;
+  private menuBtnBounds: { x: number; y: number; w: number; h: number; mode: string }[] = [];
+
   // Camera state
   camX: number = 0;
   camY: number = 0;
@@ -57,6 +60,7 @@ export class Renderer {
     this.turnText = new PIXI.Text('', { fontSize: 16, fill: 0xCCCCCC, fontFamily: 'Arial' });
     this.pocketedContainer = new PIXI.Container();
     this.shotButtonsContainer = new PIXI.Container();
+    this.menuContainer = new PIXI.Container();
   }
 
   async init(): Promise<void> {
@@ -501,6 +505,100 @@ export class Renderer {
     }
   }
 
+  showMenu(): void {
+    this.menuContainer.removeChildren();
+    this.menuBtnBounds = [];
+
+    // Dark overlay
+    const overlay = new PIXI.Graphics();
+    overlay.beginFill(0x0a0500, 0.95);
+    overlay.drawRect(0, 0, this.screenW, this.screenH);
+    overlay.endFill();
+    this.menuContainer.addChild(overlay);
+
+    // Title
+    const title = new PIXI.Text('Русский Бильярд', {
+      fontSize: 32, fill: 0xF5E6C8, fontFamily: 'Arial', fontWeight: 'bold',
+    });
+    title.anchor.set(0.5);
+    title.position.set(this.screenW / 2, this.screenH * 0.18);
+    this.menuContainer.addChild(title);
+
+    const subtitle = new PIXI.Text('Свободная пирамида', {
+      fontSize: 18, fill: 0x999999, fontFamily: 'Arial',
+    });
+    subtitle.anchor.set(0.5);
+    subtitle.position.set(this.screenW / 2, this.screenH * 0.18 + 40);
+    this.menuContainer.addChild(subtitle);
+
+    // Menu buttons
+    const buttons = [
+      { label: 'Свободная игра', mode: 'free_play', color: 0x2E7D32 },
+      { label: 'Игра с компьютером', mode: 'vs_computer', color: 0x1565C0 },
+      { label: 'Головоломки', mode: 'puzzles', color: 0xE65100 },
+    ];
+
+    const btnW = Math.min(280, this.screenW - 60);
+    const btnH = 56;
+    const gap = 20;
+    const startY = this.screenH * 0.38;
+
+    for (let i = 0; i < buttons.length; i++) {
+      const b = buttons[i];
+      const x = (this.screenW - btnW) / 2;
+      const y = startY + i * (btnH + gap);
+
+      const btn = new PIXI.Graphics();
+      btn.beginFill(b.color, 0.9);
+      btn.drawRoundedRect(0, 0, btnW, btnH, 12);
+      btn.endFill();
+      btn.lineStyle(2, 0xFFFFFF, 0.15);
+      btn.drawRoundedRect(0, 0, btnW, btnH, 12);
+      btn.position.set(x, y);
+      this.menuContainer.addChild(btn);
+
+      const label = new PIXI.Text(b.label, {
+        fontSize: 22, fill: 0xFFFFFF, fontFamily: 'Arial', fontWeight: 'bold',
+      });
+      label.anchor.set(0.5);
+      label.position.set(x + btnW / 2, y + btnH / 2);
+      this.menuContainer.addChild(label);
+
+      this.menuBtnBounds.push({ x, y, w: btnW, h: btnH, mode: b.mode });
+    }
+
+    // Decorative ball
+    const ball = new PIXI.Graphics();
+    ball.beginFill(0xFAFAFA);
+    ball.drawCircle(0, 0, 30);
+    ball.endFill();
+    const highlight = new PIXI.Graphics();
+    highlight.beginFill(0xFFFFFF, 0.4);
+    highlight.drawEllipse(-9, -9, 10, 9);
+    highlight.endFill();
+    ball.addChild(highlight);
+    ball.position.set(this.screenW / 2, this.screenH * 0.75);
+    this.menuContainer.addChild(ball);
+
+    this.menuContainer.visible = true;
+    this.app.stage.addChild(this.menuContainer);
+  }
+
+  hideMenu(): void {
+    this.menuContainer.visible = false;
+    this.app.stage.removeChild(this.menuContainer);
+    this.menuBtnBounds = [];
+  }
+
+  getMenuButtonAt(pos: Vec2): string | null {
+    for (const b of this.menuBtnBounds) {
+      if (pos.x >= b.x && pos.x <= b.x + b.w && pos.y >= b.y && pos.y <= b.y + b.h) {
+        return b.mode;
+      }
+    }
+    return null;
+  }
+
   showShotButtons(): void {
     this.shotButtonsContainer.removeChildren();
 
@@ -571,6 +669,21 @@ export class Renderer {
   }
 
   resetView(): void {
+    this.fitTableToScreen();
+    this.applyCameraTransform();
+  }
+
+  clearGame(): void {
+    this.tableContainer.removeChildren();
+    this.tableContainer.addChild(this.aimLine);
+    this.aimLine.clear();
+    this.powerBar.clear();
+    this.ballGraphics.clear();
+    this.hideShotButtons();
+    this.pocketedContainer.removeChildren();
+    this.messageText.text = '';
+    this.scoreText.text = '';
+    this.turnText.text = '';
     this.fitTableToScreen();
     this.applyCameraTransform();
   }

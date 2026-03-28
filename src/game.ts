@@ -5,6 +5,7 @@ import {
 } from './physics';
 import { Renderer } from './renderer';
 import { InputHandler } from './input';
+import type { GameMode } from './main';
 
 type GameState = 'waiting' | 'simulating' | 'ball_in_hand' | 'game_over';
 
@@ -12,24 +13,27 @@ export class Game {
   private physics: PhysicsEngine;
   private renderer: Renderer;
   private input!: InputHandler;
+  private mode: GameMode;
+  private onBackToMenu: () => void;
+  private tickerFn: (() => void) | null = null;
 
   private gameState: GameState = 'waiting';
   private currentPlayer: number = 1;
-  // Track which ball IDs each player pocketed
   private pocketedByPlayer: [number[], number[]] = [[], []];
   private activeBall!: Ball;
   private pyramidBroken: boolean = false;
 
-  constructor() {
+  constructor(renderer: Renderer, mode: GameMode, onBackToMenu: () => void) {
     const balls = createBalls();
     const pockets = createPockets();
     this.physics = new PhysicsEngine(balls, pockets);
-    this.renderer = new Renderer();
+    this.renderer = renderer;
+    this.mode = mode;
+    this.onBackToMenu = onBackToMenu;
     this.activeBall = balls[0];
   }
 
-  async start(): Promise<void> {
-    await this.renderer.init();
+  start(): void {
     this.input = new InputHandler(this.renderer);
     this.renderer.drawTable(this.physics.pockets);
     this.renderer.createBallGraphics(this.physics.balls);
@@ -38,7 +42,17 @@ export class Game {
     this.renderer.showMessage('Свободная пирамида — бейте битком', 3000);
 
     this.setupInputCallbacks();
-    this.renderer.app.ticker.add(() => this.update());
+    this.tickerFn = () => this.update();
+    this.renderer.app.ticker.add(this.tickerFn);
+  }
+
+  private cleanup(): void {
+    if (this.tickerFn) {
+      this.renderer.app.ticker.remove(this.tickerFn);
+      this.tickerFn = null;
+    }
+    this.renderer.clearGame();
+    this.input.destroy();
   }
 
   private setupInputCallbacks(): void {
@@ -213,19 +227,7 @@ export class Game {
   }
 
   private resetGame(): void {
-    const newBalls = createBalls();
-    for (let i = 0; i < this.physics.balls.length; i++) {
-      Object.assign(this.physics.balls[i], newBalls[i]);
-    }
-
-    this.activeBall = this.physics.balls[0];
-    this.pyramidBroken = false;
-    this.pocketedByPlayer = [[], []];
-    this.currentPlayer = 1;
-    this.renderer.updatePocketed([], []);
-    this.renderer.updateTurn(1);
-    this.gameState = 'waiting';
-    this.input.resetToIdle();
-    this.renderer.showMessage('Новая игра!', 2000);
+    this.cleanup();
+    this.onBackToMenu();
   }
 }
