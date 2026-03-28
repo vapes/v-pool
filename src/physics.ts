@@ -63,10 +63,11 @@ export const CUSHION_RESTITUTION = 0.75;
 // Ball-ball restitution
 export const BALL_RESTITUTION = 0.95;
 
-// Friction coefficients
-export const ROLLING_FRICTION = 0.01;    // cloth friction (deceleration)
-export const SLIDING_FRICTION = 0.2;     // sliding friction coefficient
-export const SPIN_DECAY = 0.985;          // spin decay per frame
+// Friction: deceleration in velocity-units per frame
+// At max power (45 units/frame), ball should roll ~3-4 seconds (180-240 frames)
+// So deceleration ≈ 45/200 ≈ 0.22 per frame
+export const FRICTION_DECEL = 0.22;
+export const SPIN_DECAY = 0.985;
 
 // Maximum shot power (velocity in mm/frame at 60fps)
 export const MAX_SHOT_POWER = 45;
@@ -223,14 +224,11 @@ export class PhysicsEngine {
         ball.vel.y += velDir.y * spinTransfer;
       }
 
-      // Friction - different for sliding vs rolling
+      // Friction
       if (speed > 0.1) {
-        // Deceleration from cloth friction
-        const frictionDecel = ROLLING_FRICTION * 9800 * dt; // g in mm/s^2
+        const frictionDecel = FRICTION_DECEL * dt;
         const newSpeed = Math.max(0, speed - frictionDecel);
-        if (speed > 0) {
-          ball.vel = vecScale(vecNorm(ball.vel), newSpeed);
-        }
+        ball.vel = vecScale(vecNorm(ball.vel), newSpeed);
       } else {
         ball.vel = vec2(0, 0);
       }
@@ -423,11 +421,11 @@ export class PhysicsEngine {
         pos.y = Math.max(BALL_RADIUS, Math.min(TABLE_HEIGHT - BALL_RADIUS, pos.y));
       }
 
-      // Friction
+      // Friction (same formula as stepPhysics, dt=0.25 per prediction step)
       const speed = vecLen(currentVel);
-      if (speed > 0.5) {
-        const friction = ROLLING_FRICTION * 9800 * 0.25;
-        const newSpeed = Math.max(0, speed - friction);
+      if (speed > 0.3) {
+        const frictionDecel = FRICTION_DECEL * 0.25;
+        const newSpeed = Math.max(0, speed - frictionDecel);
         currentVel = vecScale(vecNorm(currentVel), newSpeed);
       } else {
         break;
