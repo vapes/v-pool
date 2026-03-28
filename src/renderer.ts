@@ -1,7 +1,7 @@
 import * as PIXI from 'pixi.js';
 import {
   Ball, Pocket, Vec2, TABLE_WIDTH, TABLE_HEIGHT, BALL_RADIUS,
-  vec2, vecLen
+  vec2, vecLen, TrajectoryResult
 } from './physics';
 
 const TABLE_COLOR = 0x1B5E20;
@@ -329,37 +329,60 @@ export class Renderer {
     }
   }
 
-  drawAimLine(points: Vec2[], power: number): void {
+  drawAimLine(traj: TrajectoryResult, power: number): void {
     this.aimLine.clear();
-    if (points.length < 2) return;
 
-    // Line is drawn in table coords but rendered through camZoom.
-    // Compensate so it looks ~3-4px on screen regardless of zoom.
-    const pxInTable = 1 / this.camZoom; // 1 screen pixel in table units
-    const maxAlpha = Math.max(0.5, Math.min(0.9, power * 2));
-    const baseWidth = pxInTable * 4;
+    const px = 1 / this.camZoom; // 1 screen pixel in table units
+    const w = px * 2; // consistent thin line
+    const alpha = Math.max(0.5, Math.min(0.9, power * 2));
 
-    for (let i = 0; i < points.length - 1; i++) {
-      const t = i / points.length;
-      const alpha = maxAlpha * (1 - t * 0.7);
-      const width = Math.max(pxInTable * 2, baseWidth * (1 - t * 0.5));
-
-      if (i >= points.length - 3 && points.length > 5) {
-        this.aimLine.lineStyle(width, 0xFFAA00, alpha * 0.8);
-      } else {
-        this.aimLine.lineStyle(width, AIM_LINE_COLOR, alpha);
-      }
-
-      // Dashed line
-      if (i % 3 !== 2) {
-        this.aimLine.moveTo(points[i].x, points[i].y);
-        this.aimLine.lineTo(points[i + 1].x, points[i + 1].y);
+    // Cue ball path — white dashed
+    const cp = traj.cuePath;
+    if (cp.length >= 2) {
+      this.aimLine.lineStyle(w, AIM_LINE_COLOR, alpha);
+      this.aimLine.moveTo(cp[0].x, cp[0].y);
+      for (let i = 1; i < cp.length; i++) {
+        // Dashed: draw 2 segments, skip 1
+        if (i % 3 !== 0) {
+          this.aimLine.lineTo(cp[i].x, cp[i].y);
+        } else {
+          this.aimLine.moveTo(cp[i].x, cp[i].y);
+        }
       }
     }
 
-    // Circle around cue ball
-    this.aimLine.lineStyle(pxInTable * 2, AIM_LINE_COLOR, maxAlpha);
-    this.aimLine.drawCircle(points[0].x, points[0].y, BALL_RADIUS + pxInTable * 6);
+    // Object ball direction — orange solid
+    if (traj.objectBallDir.length === 2) {
+      const [from, to] = traj.objectBallDir;
+      this.aimLine.lineStyle(w, 0xFFAA00, alpha * 0.9);
+      this.aimLine.moveTo(from.x, from.y);
+      this.aimLine.lineTo(to.x, to.y);
+      // Small circle at object ball contact
+      this.aimLine.lineStyle(w, 0xFFAA00, alpha);
+      this.aimLine.drawCircle(from.x, from.y, BALL_RADIUS);
+    }
+
+    // Cue ball deflection after hit — white dotted, fainter
+    if (traj.cueDeflection.length === 2) {
+      const [from, to] = traj.cueDeflection;
+      this.aimLine.lineStyle(w, AIM_LINE_COLOR, alpha * 0.5);
+      // Dotted pattern
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const dotSpacing = px * 8;
+      const dots = Math.floor(len / dotSpacing);
+      for (let i = 0; i < dots; i++) {
+        const t = i / dots;
+        const x = from.x + dx * t;
+        const y = from.y + dy * t;
+        if (i % 2 === 0) {
+          this.aimLine.moveTo(x, y);
+        } else {
+          this.aimLine.lineTo(x, y);
+        }
+      }
+    }
   }
 
   clearAimLine(): void { this.aimLine.clear(); }

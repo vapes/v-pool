@@ -90,10 +90,10 @@ export class Game {
     this.input.onAimUpdate = (direction, power) => {
       if (this.gameState !== 'waiting') return;
 
-      const trajectory = this.physics.predictTrajectory(
-        this.activeBall.pos, direction, power, 150, this.activeBall.id
+      const traj = this.physics.predictTrajectory(
+        this.activeBall.pos, direction, power, 200, this.activeBall.id
       );
-      this.renderer.drawAimLine(trajectory, power);
+      this.renderer.drawAimLine(traj, power);
       this.renderer.drawPowerBar(power);
     };
 

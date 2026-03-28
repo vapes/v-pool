@@ -175,6 +175,12 @@ export function isMoving(balls: Ball[]): boolean {
   return false;
 }
 
+export interface TrajectoryResult {
+  cuePath: Vec2[];           // cue ball path until collision
+  objectBallDir: Vec2[];     // [contact point, end point] of object ball
+  cueDeflection: Vec2[];     // cue ball path after collision
+}
+
 export class PhysicsEngine {
   balls: Ball[];
   pockets: Pocket[];
@@ -384,35 +390,45 @@ export class PhysicsEngine {
   }
 
   // Predict trajectory for aim line
-  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 200, skipBallId: number = 0): Vec2[] {
-    const points: Vec2[] = [{ ...startPos }];
+  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 200, skipBallId: number = 0): TrajectoryResult {
+    const cuePath: Vec2[] = [{ ...startPos }];
     const vel = vecScale(direction, power * MAX_SHOT_POWER);
     let pos = { ...startPos };
     let currentVel = { ...vel };
-    const stepDt = 0.125; // small step for accuracy at high speeds
+    const stepDt = 0.125;
+
+    let objectBallDir: Vec2[] = [];
+    let cueDeflection: Vec2[] = [];
 
     for (let i = 0; i < maxSteps; i++) {
       pos = vecAdd(pos, vecScale(currentVel, stepDt));
 
       // Check ball collision
-      let hitBall = false;
       for (const ball of this.balls) {
         if (ball.isPocketed || ball.id === skipBallId) continue;
         if (vecDist(pos, ball.pos) < BALL_RADIUS * 2) {
-          points.push({ ...pos });
-          hitBall = true;
-
-          // Calculate reflection for ghost ball trajectory
+          // Contact point: position the cue ball just touching the object ball
           const normal = vecNorm(vecSub(pos, ball.pos));
-          const targetDir = vecScale(normal, -1);
-          // Show where the object ball would go
-          const objBallEnd = vecAdd(ball.pos, vecScale(targetDir, 200));
-          points.push({ ...ball.pos });
-          points.push(objBallEnd);
-          return points;
+          const contactPos = vecAdd(ball.pos, vecScale(normal, BALL_RADIUS * 2));
+          cuePath.push(contactPos);
+
+          // Object ball goes in the direction from cue ball to object ball center
+          const hitDir = vecNorm(vecSub(ball.pos, contactPos));
+          const objSpeed = vecDot(currentVel, hitDir) * BALL_RESTITUTION;
+          const objVel = vecScale(hitDir, objSpeed);
+          const objEnd = vecAdd(ball.pos, vecScale(vecNorm(objVel), 300));
+          objectBallDir = [{ ...ball.pos }, objEnd];
+
+          // Cue ball deflects: subtract the component transferred to object ball
+          const cueAfter = vecSub(currentVel, vecScale(hitDir, vecDot(currentVel, hitDir)));
+          if (vecLen(cueAfter) > 0.5) {
+            const deflEnd = vecAdd(contactPos, vecScale(vecNorm(cueAfter), 200));
+            cueDeflection = [{ ...contactPos }, deflEnd];
+          }
+
+          return { cuePath, objectBallDir, cueDeflection };
         }
       }
-      if (hitBall) break;
 
       // Check cushion bounce
       if (pos.x - BALL_RADIUS < 0 || pos.x + BALL_RADIUS > TABLE_WIDTH) {
@@ -434,9 +450,9 @@ export class PhysicsEngine {
         break;
       }
 
-      points.push({ ...pos });
+      cuePath.push({ ...pos });
     }
 
-    return points;
+    return { cuePath, objectBallDir, cueDeflection };
   }
 }
