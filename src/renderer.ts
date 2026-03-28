@@ -29,6 +29,7 @@ export class Renderer {
   messageText: PIXI.Text;
   scoreText: PIXI.Text;
   turnText: PIXI.Text;
+  pocketedContainer: PIXI.Container;
 
   // Camera state
   camX: number = 0;
@@ -52,6 +53,7 @@ export class Renderer {
     this.messageText = new PIXI.Text('', { fontSize: 24, fill: 0xffffff, fontFamily: 'Arial' });
     this.scoreText = new PIXI.Text('', { fontSize: 18, fill: 0xffffff, fontFamily: 'Arial' });
     this.turnText = new PIXI.Text('', { fontSize: 16, fill: 0xCCCCCC, fontFamily: 'Arial' });
+    this.pocketedContainer = new PIXI.Container();
   }
 
   async init(): Promise<void> {
@@ -90,6 +92,8 @@ export class Renderer {
     this.turnText.anchor.set(1, 0);
     this.turnText.position.set(this.screenW - 10, 10);
     this.uiContainer.addChild(this.turnText);
+
+    this.uiContainer.addChild(this.pocketedContainer);
 
     // Fit table to screen initially (rotated for portrait)
     this.fitTableToScreen();
@@ -442,8 +446,54 @@ export class Renderer {
     }
   }
 
-  updateScore(p1: number, p2: number): void {
-    this.scoreText.text = `Игрок 1: ${p1}  |  Игрок 2: ${p2}`;
+  updatePocketed(p1Balls: number[], p2Balls: number[]): void {
+    this.pocketedContainer.removeChildren();
+    const ballR = 10;
+    const startY = this.screenH - 40;
+    const gap = ballR * 2.4;
+
+    // Player 1 — left side
+    const p1Label = new PIXI.Text(`Игрок 1: ${p1Balls.length}`, {
+      fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
+    });
+    p1Label.position.set(10, startY - 22);
+    this.pocketedContainer.addChild(p1Label);
+
+    for (let i = 0; i < p1Balls.length; i++) {
+      const g = new PIXI.Graphics();
+      g.beginFill(0xFAFAFA);
+      g.drawCircle(0, 0, ballR);
+      g.endFill();
+      const num = new PIXI.Text(p1Balls[i].toString(), {
+        fontSize: 10, fill: 0x333333, fontWeight: 'bold', fontFamily: 'Arial',
+      });
+      num.anchor.set(0.5);
+      g.addChild(num);
+      g.position.set(15 + i * gap, startY);
+      this.pocketedContainer.addChild(g);
+    }
+
+    // Player 2 — right side
+    const p2Label = new PIXI.Text(`Игрок 2: ${p2Balls.length}`, {
+      fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
+    });
+    p2Label.anchor.set(1, 0);
+    p2Label.position.set(this.screenW - 10, startY - 22);
+    this.pocketedContainer.addChild(p2Label);
+
+    for (let i = 0; i < p2Balls.length; i++) {
+      const g = new PIXI.Graphics();
+      g.beginFill(0xFAFAFA);
+      g.drawCircle(0, 0, ballR);
+      g.endFill();
+      const num = new PIXI.Text(p2Balls[i].toString(), {
+        fontSize: 10, fill: 0x333333, fontWeight: 'bold', fontFamily: 'Arial',
+      });
+      num.anchor.set(0.5);
+      g.addChild(num);
+      g.position.set(this.screenW - 15 - i * gap, startY);
+      this.pocketedContainer.addChild(g);
+    }
   }
 
   updateTurn(n: number): void {

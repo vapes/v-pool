@@ -1,13 +1,12 @@
 import {
   Ball, PhysicsEngine, createBalls, createPockets,
-  shootCueBall, isMoving, vec2, vecSub, vecNorm, vecLen,
-  TABLE_WIDTH, TABLE_HEIGHT, BALL_RADIUS, SpinParams
+  shootCueBall, isMoving, vec2, vecSub, vecLen,
+  TABLE_WIDTH, TABLE_HEIGHT, BALL_RADIUS, SpinParams, Vec2
 } from './physics';
 import { Renderer } from './renderer';
 import { InputHandler } from './input';
-import { Vec2 } from './physics';
 
-type GameState = 'waiting' | 'shooting' | 'simulating' | 'ball_in_hand' | 'game_over';
+type GameState = 'waiting' | 'simulating' | 'ball_in_hand' | 'game_over';
 
 export class Game {
   private physics: PhysicsEngine;
@@ -16,8 +15,8 @@ export class Game {
 
   private gameState: GameState = 'waiting';
   private currentPlayer: number = 1;
-  private scores: [number, number] = [0, 0];
-  // The ball currently selected for shooting (any ball in Russian billiards)
+  // Track which ball IDs each player pocketed
+  private pocketedByPlayer: [number[], number[]] = [[], []];
   private activeBall!: Ball;
   private pyramidBroken: boolean = false;
 
@@ -26,7 +25,7 @@ export class Game {
     const pockets = createPockets();
     this.physics = new PhysicsEngine(balls, pockets);
     this.renderer = new Renderer();
-    this.activeBall = balls[0]; // cue ball by default
+    this.activeBall = balls[0];
   }
 
   async start(): Promise<void> {
@@ -34,7 +33,7 @@ export class Game {
     this.input = new InputHandler(this.renderer);
     this.renderer.drawTable(this.physics.pockets);
     this.renderer.createBallGraphics(this.physics.balls);
-    this.renderer.updateScore(0, 0);
+    this.renderer.updatePocketed([], []);
     this.renderer.updateTurn(1);
     this.renderer.showMessage('Свободная пирамида — бейте битком', 3000);
 
@@ -43,14 +42,11 @@ export class Game {
   }
 
   private setupInputCallbacks(): void {
-    // Find which ball the player touched (any non-pocketed ball)
     this.input.findBallAtScreen = (screenPos: Vec2): Vec2 | null => {
       if (this.gameState !== 'waiting') return null;
 
       const hitRadius = Math.max(30, BALL_RADIUS * this.renderer.camZoom + 20);
 
-      // Before pyramid is broken, only cue ball (id=0) can be hit
-      // After break, any ball can be used as the striker
       for (const ball of this.physics.balls) {
         if (ball.isPocketed) continue;
         if (!this.pyramidBroken && !ball.isCue) continue;
@@ -78,7 +74,6 @@ export class Game {
       shootCueBall(this.activeBall, direction, power, spin);
       this.gameState = 'simulating';
 
-      // Mark pyramid as broken after first shot
       if (!this.pyramidBroken) {
         this.pyramidBroken = true;
       }
@@ -101,10 +96,9 @@ export class Game {
       if (this.gameState !== 'ball_in_hand') return;
 
       const cue = this.physics.balls[0];
-      let placeX = Math.max(BALL_RADIUS, Math.min(TABLE_WIDTH - BALL_RADIUS, pos.x));
-      let placeY = Math.max(BALL_RADIUS, Math.min(TABLE_HEIGHT - BALL_RADIUS, pos.y));
+      const placeX = Math.max(BALL_RADIUS, Math.min(TABLE_WIDTH - BALL_RADIUS, pos.x));
+      const placeY = Math.max(BALL_RADIUS, Math.min(TABLE_HEIGHT - BALL_RADIUS, pos.y));
 
-      // Check no overlap with other balls
       let valid = true;
       for (const ball of this.physics.balls) {
         if (ball.isPocketed || ball.id === 0) continue;
@@ -130,87 +124,80 @@ export class Game {
   }
 
   private update(): void {
-    const dt = 1;
-
     if (this.gameState === 'simulating') {
-      this.physics.update(dt);
-
+      this.physics.update(1);
       if (!isMoving(this.physics.balls)) {
         this.onTurnEnd();
       }
     }
-
     this.renderer.updateBalls(this.physics.balls);
   }
 
   private onTurnEnd(): void {
     const pocketed = this.physics.pocketedThisTurn;
-    const activePocketed = pocketed.includes(this.activeBall.id);
-    const otherPocketed = pocketed.filter(id => id !== this.activeBall.id);
 
-    let foul = false;
-
-    // Foul: the ball you hit with went into a pocket (scratch)
-    if (activePocketed && otherPocketed.length === 0) {
-      foul = true;
-      this.renderer.showMessage('Фол! Биток в лузе без забитого шара', 2500);
-    }
-
-    // Foul: no ball hit
-    if (!foul && this.physics.firstHitBallId === -1) {
-      foul = true;
+    // Foul: no ball was hit at all
+    if (pocketed.length === 0 && this.physics.firstHitBallId === -1) {
       this.renderer.showMessage('Фол! Нет касания', 2500);
+      this.switchPlayer();
+      this.gameState = 'waiting';
+      this.activeBall = this.physics.balls[0];
+      this.input.resetToIdle();
+      return;
     }
 
-    if (foul) {
-      // Re-spot any pocketed balls on a foul
+    if (pocketed.length > 0) {
+      // All pocketed balls go to the current player's score
+      // In Russian billiards (свободная пирамида):
+      // - You CAN pocket the cue ball (свояк) — it counts!
+      // - You CAN pocket the ball you're hitting with — it counts!
+      // - Any ball going into a pocket scores for the current player
       for (const id of pocketed) {
-        this.respotBall(id);
+        this.pocketedByPlayer[this.currentPlayer - 1].push(id);
       }
-      this.switchPlayer();
-    } else if (pocketed.length > 0) {
-      // In Russian billiards, ANY pocketed ball scores (including the striker!)
-      // The ball that was struck (active ball) going in also counts
-      // if at least one other ball was also pocketed or hit a cushion
-      const points = pocketed.length;
-      this.scores[this.currentPlayer - 1] += points;
-      this.renderer.updateScore(this.scores[0], this.scores[1]);
 
-      const word = points === 1 ? 'шар' : (points < 5 ? 'шара' : 'шаров');
-      this.renderer.showMessage(
-        `Игрок ${this.currentPlayer}: +${points} ${word}!`, 2000
+      this.renderer.updatePocketed(
+        this.pocketedByPlayer[0],
+        this.pocketedByPlayer[1]
       );
 
-      // If active ball was pocketed, need to place cue ball
-      if (activePocketed) {
-        // Use cue ball (id=0) for ball-in-hand if it was the one pocketed,
-        // otherwise just continue
-        const cue = this.physics.balls[0];
-        if (cue.isPocketed) {
-          this.gameState = 'ball_in_hand';
-          this.input.enableBallInHand();
-          this.renderer.showMessage('Поставьте биток', 0);
-          // Don't check win until ball placed
-        }
-      }
+      const count = pocketed.length;
+      const word = count === 1 ? 'шар' : (count < 5 ? 'шара' : 'шаров');
+      this.renderer.showMessage(
+        `Игрок ${this.currentPlayer}: +${count} ${word}!`, 2000
+      );
 
       // Check win (first to 8)
-      if (this.scores[this.currentPlayer - 1] >= 8) {
+      if (this.pocketedByPlayer[this.currentPlayer - 1].length >= 8) {
         this.gameState = 'game_over';
         this.renderer.showMessage(`Игрок ${this.currentPlayer} победил!`, 0);
         setTimeout(() => this.resetGame(), 5000);
         return;
       }
 
-      // Player continues after scoring
-    } else {
-      // No score, no foul - switch player
-      this.switchPlayer();
-    }
+      // If cue ball (id=0) was pocketed, need to place it back
+      const cue = this.physics.balls[0];
+      if (cue.isPocketed) {
+        cue.isPocketed = false;
+        cue.pos = vec2(TABLE_WIDTH / 2, TABLE_HEIGHT * 0.75);
+        cue.vel = vec2(0, 0);
+        cue.spin = vec2(0, 0);
+        this.gameState = 'ball_in_hand';
+        this.input.enableBallInHand();
+        this.renderer.showMessage('Поставьте биток', 0);
+        // Player continues (scored, no foul)
+        return;
+      }
 
-    if (this.gameState !== 'ball_in_hand' && this.gameState !== 'game_over') {
+      // Player scored — continues shooting
       this.gameState = 'waiting';
-      this.activeBall = this.physics.balls[0]; // reset to cue ball
+      this.activeBall = this.physics.balls[0];
+      this.input.resetToIdle();
+    } else {
+      // Nothing pocketed — switch player
+      this.switchPlayer();
+      this.gameState = 'waiting';
+      this.activeBall = this.physics.balls[0];
       this.input.resetToIdle();
     }
   }
@@ -218,38 +205,6 @@ export class Game {
   private switchPlayer(): void {
     this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
     this.renderer.updateTurn(this.currentPlayer);
-  }
-
-  private respotBall(id: number): void {
-    const ball = this.physics.balls.find(b => b.id === id);
-    if (!ball) return;
-
-    ball.isPocketed = false;
-    ball.vel = vec2(0, 0);
-    ball.spin = vec2(0, 0);
-
-    const footSpot = vec2(TABLE_WIDTH / 2, TABLE_HEIGHT * 0.27);
-    let pos = { ...footSpot };
-    let attempts = 0;
-
-    while (attempts < 50) {
-      let overlap = false;
-      for (const other of this.physics.balls) {
-        if (other.id === id || other.isPocketed) continue;
-        if (vecLen(vecSub(pos, other.pos)) < BALL_RADIUS * 2.5) {
-          overlap = true;
-          break;
-        }
-      }
-      if (!overlap) break;
-      pos = vec2(
-        footSpot.x + (Math.random() - 0.5) * BALL_RADIUS * 4,
-        footSpot.y + attempts * BALL_RADIUS * 2.2
-      );
-      attempts++;
-    }
-
-    ball.pos = pos;
   }
 
   private resetGame(): void {
@@ -260,9 +215,9 @@ export class Game {
 
     this.activeBall = this.physics.balls[0];
     this.pyramidBroken = false;
-    this.scores = [0, 0];
+    this.pocketedByPlayer = [[], []];
     this.currentPlayer = 1;
-    this.renderer.updateScore(0, 0);
+    this.renderer.updatePocketed([], []);
     this.renderer.updateTurn(1);
     this.gameState = 'waiting';
     this.input.resetToIdle();
