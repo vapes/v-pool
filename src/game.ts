@@ -11,7 +11,7 @@ type GameState = 'waiting' | 'shooting' | 'simulating' | 'ball_in_hand' | 'game_
 export class Game {
   private physics: PhysicsEngine;
   private renderer: Renderer;
-  private input: InputHandler;
+  private input!: InputHandler;
 
   private gameState: GameState = 'waiting';
   private currentPlayer: number = 1;
@@ -23,12 +23,12 @@ export class Game {
     const pockets = createPockets();
     this.physics = new PhysicsEngine(balls, pockets);
     this.renderer = new Renderer();
-    this.input = new InputHandler(this.renderer);
     this.cueBall = balls[0];
   }
 
   async start(): Promise<void> {
     await this.renderer.init();
+    this.input = new InputHandler(this.renderer);
     this.renderer.drawTable(this.physics.pockets);
     this.renderer.createBallGraphics(this.physics.balls);
     this.renderer.updateScore(0, 0);
