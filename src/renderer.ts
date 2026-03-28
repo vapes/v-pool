@@ -32,7 +32,6 @@ export class Renderer {
   pocketedContainer: PIXI.Container;
   shotButtonsContainer: PIXI.Container;
   private shootBtnBounds = { x: 0, y: 0, w: 0, h: 0 };
-  private cancelBtnBounds = { x: 0, y: 0, w: 0, h: 0 };
 
   // Camera state
   camX: number = 0;
@@ -505,11 +504,9 @@ export class Renderer {
   showShotButtons(): void {
     this.shotButtonsContainer.removeChildren();
 
-    const btnW = 120;
+    const btnW = 140;
     const btnH = 50;
-    const gap = 20;
-    const totalW = btnW * 2 + gap;
-    const x0 = (this.screenW - totalW) / 2;
+    const x0 = (this.screenW - btnW) / 2;
     const y0 = this.screenH - 70;
 
     // Shoot button (green)
@@ -528,23 +525,6 @@ export class Renderer {
     this.shotButtonsContainer.addChild(shootBtn, shootLabel);
     this.shootBtnBounds = { x: x0, y: y0, w: btnW, h: btnH };
 
-    // Cancel button (red)
-    const cancelBtn = new PIXI.Graphics();
-    cancelBtn.beginFill(0xC62828, 0.9);
-    cancelBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
-    cancelBtn.endFill();
-    cancelBtn.lineStyle(2, 0xEF5350);
-    cancelBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
-    const cx = x0 + btnW + gap;
-    cancelBtn.position.set(cx, y0);
-    const cancelLabel = new PIXI.Text('Отмена', {
-      fontSize: 22, fill: 0xFFFFFF, fontFamily: 'Arial', fontWeight: 'bold',
-    });
-    cancelLabel.anchor.set(0.5);
-    cancelLabel.position.set(cx + btnW / 2, y0 + btnH / 2);
-    this.shotButtonsContainer.addChild(cancelBtn, cancelLabel);
-    this.cancelBtnBounds = { x: cx, y: y0, w: btnW, h: btnH };
-
     this.shotButtonsContainer.visible = true;
   }
 
@@ -553,17 +533,37 @@ export class Renderer {
     this.shotButtonsContainer.removeChildren();
   }
 
-  getShotButtonAt(pos: Vec2): 'shoot' | 'cancel' | null {
+  getShotButtonAt(pos: Vec2): 'shoot' | null {
     if (!this.shotButtonsContainer.visible) return null;
     const s = this.shootBtnBounds;
     if (pos.x >= s.x && pos.x <= s.x + s.w && pos.y >= s.y && pos.y <= s.y + s.h) {
       return 'shoot';
     }
-    const c = this.cancelBtnBounds;
-    if (pos.x >= c.x && pos.x <= c.x + c.w && pos.y >= c.y && pos.y <= c.y + c.h) {
-      return 'cancel';
-    }
     return null;
+  }
+
+  getPowerBarBounds(): { x: number; y: number; w: number; h: number } {
+    const barWidth = 20;
+    const barHeight = 200;
+    const touchPadding = 20;
+    return {
+      x: 20 - touchPadding,
+      y: this.screenH - barHeight - 100 - touchPadding,
+      w: barWidth + touchPadding * 2,
+      h: barHeight + touchPadding * 2,
+    };
+  }
+
+  isTouchOnPowerBar(pos: Vec2): boolean {
+    const b = this.getPowerBarBounds();
+    return pos.x >= b.x && pos.x <= b.x + b.w && pos.y >= b.y && pos.y <= b.y + b.h;
+  }
+
+  getPowerFromScreenY(screenY: number): number {
+    const barHeight = 200;
+    const barY = this.screenH - barHeight - 100;
+    const clamped = Math.max(barY, Math.min(barY + barHeight, screenY));
+    return 1 - (clamped - barY) / barHeight;
   }
 
   updateTurn(n: number): void {

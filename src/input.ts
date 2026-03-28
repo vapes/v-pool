@@ -31,6 +31,7 @@ export class InputHandler {
   private isPanning = false;
   private lastPanPos: Vec2 = vec2(0, 0);
   private prevState: InputState = 'idle';
+  private isDraggingPowerBar = false;
 
   constructor(renderer: Renderer) {
     this.renderer = renderer;
@@ -155,6 +156,7 @@ export class InputHandler {
         this.state = this.prevState;
       } else if (this.state === 'confirming') {
         // Stay in confirming — buttons are shown
+        this.isDraggingPowerBar = false;
       }
       this.isPanning = false;
     } else if (this.activeTouches.size === 1 && this.state === 'gesturing') {
@@ -235,9 +237,9 @@ export class InputHandler {
       return;
     }
 
-    // In confirming state: check buttons, spin, or ball tap
+    // In confirming state: check button, power bar, spin, or ball tap
     if (this.state === 'confirming') {
-      // Check shot/cancel buttons
+      // Check shoot button
       const btn = this.renderer.getShotButtonAt(pos);
       if (btn === 'shoot') {
         this.renderer.hideShotButtons();
@@ -248,8 +250,11 @@ export class InputHandler {
         this.power = 0;
         return;
       }
-      if (btn === 'cancel') {
-        this.cancelConfirming();
+
+      // Check power bar — start dragging to adjust power
+      if (this.renderer.isTouchOnPowerBar(pos)) {
+        this.isDraggingPowerBar = true;
+        this.updatePowerFromBar(pos);
         return;
       }
 
@@ -278,7 +283,7 @@ export class InputHandler {
         return;
       }
 
-      // Tap elsewhere → ignore (don't cancel, don't pan)
+      // Tap elsewhere → ignore
       return;
     }
 
@@ -310,6 +315,12 @@ export class InputHandler {
   private handleSingleMove(pos: Vec2): void {
     if (this.state === 'spinning') {
       this.updateSpin(pos);
+      return;
+    }
+
+    // Dragging power bar in confirming state
+    if (this.state === 'confirming' && this.isDraggingPowerBar) {
+      this.updatePowerFromBar(pos);
       return;
     }
 
@@ -347,6 +358,11 @@ export class InputHandler {
   }
 
   private handleSingleEnd(_pos: Vec2): void {
+    if (this.state === 'confirming' && this.isDraggingPowerBar) {
+      this.isDraggingPowerBar = false;
+      return;
+    }
+
     if (this.state === 'spinning') {
       this.state = this.prevState;
       return;
@@ -370,6 +386,12 @@ export class InputHandler {
     }
   }
 
+  private updatePowerFromBar(pos: Vec2): void {
+    this.power = Math.max(0.02, this.renderer.getPowerFromScreenY(pos.y));
+    this.renderer.drawPowerBar(this.power);
+    this.onAimUpdate?.(this.aimDirection, this.power);
+  }
+
   private cancelAiming(): void {
     if (this.state === 'aiming' || this.state === 'confirming') {
       this.renderer.hideShotButtons();
@@ -383,6 +405,7 @@ export class InputHandler {
 
   private cancelConfirming(): void {
     this.renderer.hideShotButtons();
+    this.isDraggingPowerBar = false;
     this.state = 'idle';
     this.power = 0;
     this.renderer.clearAimLine();
