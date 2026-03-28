@@ -94,26 +94,33 @@ export class Renderer {
   }
 
   private calculateScale(): void {
-    // Portrait mode: table is vertical
-    // Leave space for UI elements at bottom
-    const uiSpace = 180;
-    const padding = 30;
+    // Portrait mode: rotate table 90° so long side goes vertically
+    // After rotation: TABLE_HEIGHT maps to screen width, TABLE_WIDTH maps to screen height
+    const uiSpace = 160;
+    const padding = 20;
     const availW = this.screenW - padding * 2;
     const availH = this.screenH - padding * 2 - uiSpace;
 
-    // Table in portrait: width maps to screen width, height maps to screen height
-    const scaleX = availW / TABLE_WIDTH;
-    const scaleY = availH / TABLE_HEIGHT;
+    const scaleX = availW / TABLE_HEIGHT;  // table height fits screen width
+    const scaleY = availH / TABLE_WIDTH;   // table width fits screen height
     this.scale = Math.min(scaleX, scaleY);
 
-    // Center the table
-    const tableDisplayW = TABLE_WIDTH * this.scale;
-    const tableDisplayH = TABLE_HEIGHT * this.scale;
+    // After -90° rotation, the table's top-left moves.
+    // Rotation pivot is (0,0). After rotating -90°:
+    //   original (x,y) -> (y, -x)
+    // So we offset to center the rotated table on screen.
+    const tableDisplayW = TABLE_HEIGHT * this.scale; // visual width after rotation
+    const tableDisplayH = TABLE_WIDTH * this.scale;  // visual height after rotation
     this.offsetX = (this.screenW - tableDisplayW) / 2;
     this.offsetY = padding;
 
-    this.tableContainer.position.set(this.offsetX, this.offsetY);
+    this.tableContainer.rotation = -Math.PI / 2;
     this.tableContainer.scale.set(this.scale);
+    // After -90° rotation around origin, shift right by visual width and down by offset
+    this.tableContainer.position.set(
+      this.offsetX + tableDisplayW,
+      this.offsetY
+    );
   }
 
   private onResize(): void {
@@ -177,18 +184,23 @@ export class Renderer {
     this.uiContainer.addChild(this.spinIndicator);
   }
 
-  // Convert screen coordinates to table coordinates
+  // Convert screen coordinates to table coordinates (accounting for -90° rotation)
   screenToTable(screenX: number, screenY: number): Vec2 {
-    const x = (screenX - this.offsetX) / this.scale;
-    const y = (screenY - this.offsetY) / this.scale;
-    return vec2(x, y);
+    // Reverse the container transform:
+    // screen -> undo position -> undo scale -> undo rotation(-90°)
+    const tableDisplayW = TABLE_HEIGHT * this.scale;
+    const localX = (screenY - this.offsetY) / this.scale;
+    const localY = (this.offsetX + tableDisplayW - screenX) / this.scale;
+    return vec2(localX, localY);
   }
 
-  // Convert table coordinates to screen coordinates
+  // Convert table coordinates to screen coordinates (accounting for -90° rotation)
   tableToScreen(tableX: number, tableY: number): Vec2 {
-    const x = tableX * this.scale + this.offsetX;
-    const y = tableY * this.scale + this.offsetY;
-    return vec2(x, y);
+    // Apply rotation(-90°): (x,y) -> (y, -x), then scale and offset
+    const tableDisplayW = TABLE_HEIGHT * this.scale;
+    const screenX = this.offsetX + tableDisplayW - tableY * this.scale;
+    const screenY = this.offsetY + tableX * this.scale;
+    return vec2(screenX, screenY);
   }
 
   drawTable(pockets: Pocket[]): void {
