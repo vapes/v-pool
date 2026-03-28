@@ -1,7 +1,7 @@
 import { Vec2, vec2, vecSub, vecLen, vecNorm, BALL_RADIUS } from './physics';
 import { Renderer } from './renderer';
 
-export type InputState = 'idle' | 'aiming' | 'spinning' | 'panning' | 'gesturing' | 'ball_in_hand';
+export type InputState = 'idle' | 'aiming' | 'confirming' | 'spinning' | 'panning' | 'gesturing' | 'ball_in_hand';
 
 export class InputHandler {
   private renderer: Renderer;
@@ -19,6 +19,7 @@ export class InputHandler {
   onAimUpdate: ((direction: Vec2, power: number) => void) | null = null;
   onSpinChange: ((x: number, y: number) => void) | null = null;
   onBallInHandPlace: ((pos: Vec2) => void) | null = null;
+  onCancelAim: (() => void) | null = null;
   // Called to find which ball is at screen position; returns ball screen pos or null
   findBallAtScreen: ((pos: Vec2) => Vec2 | null) | null = null;
 
@@ -29,6 +30,7 @@ export class InputHandler {
   private lastPinchCenter: Vec2 = vec2(0, 0);
   private isPanning = false;
   private lastPanPos: Vec2 = vec2(0, 0);
+  private prevState: InputState = 'idle';
 
   constructor(renderer: Renderer) {
     this.renderer = renderer;
@@ -150,7 +152,9 @@ export class InputHandler {
       } else if (this.state === 'gesturing' || this.state === 'panning') {
         this.state = 'idle';
       } else if (this.state === 'spinning') {
-        this.state = 'idle';
+        this.state = this.prevState;
+      } else if (this.state === 'confirming') {
+        // Stay in confirming — buttons are shown
       }
       this.isPanning = false;
     } else if (this.activeTouches.size === 1 && this.state === 'gesturing') {
@@ -231,10 +235,58 @@ export class InputHandler {
       return;
     }
 
+    // In confirming state: check buttons, spin, or ball tap
+    if (this.state === 'confirming') {
+      // Check shot/cancel buttons
+      const btn = this.renderer.getShotButtonAt(pos);
+      if (btn === 'shoot') {
+        this.renderer.hideShotButtons();
+        if (this.power > 0.02) {
+          this.onShoot?.(this.aimDirection, this.power);
+        }
+        this.state = 'idle';
+        this.power = 0;
+        return;
+      }
+      if (btn === 'cancel') {
+        this.cancelConfirming();
+        return;
+      }
+
+      // Check spin indicator
+      if (this.isTouchOnSpinIndicator(pos)) {
+        this.prevState = 'confirming';
+        this.state = 'spinning';
+        this.updateSpin(pos);
+        return;
+      }
+
+      // Check if tapping the same active ball → re-aim
+      const savedCueBallPos = { ...this.cueBallScreenPos };
+      if (this.isTouchOnAnyBall(pos)) {
+        // If same ball (cueBallScreenPos didn't change much), re-aim
+        const sameBall = vecLen(vecSub(this.cueBallScreenPos, savedCueBallPos)) < 5;
+        if (sameBall) {
+          this.renderer.hideShotButtons();
+          this.state = 'aiming';
+          this.lastPanPos = { ...pos };
+          this.updateAimFromScreenPos(pos);
+          return;
+        }
+        // Different ball → cancel
+        this.cancelConfirming();
+        return;
+      }
+
+      // Tap elsewhere → ignore (don't cancel, don't pan)
+      return;
+    }
+
     if (this.state !== 'idle') return;
 
     // Check spin indicator
     if (this.isTouchOnSpinIndicator(pos)) {
+      this.prevState = 'idle';
       this.state = 'spinning';
       this.updateSpin(pos);
       return;
@@ -296,7 +348,7 @@ export class InputHandler {
 
   private handleSingleEnd(_pos: Vec2): void {
     if (this.state === 'spinning') {
-      this.state = 'idle';
+      this.state = this.prevState;
       return;
     }
 
@@ -309,20 +361,33 @@ export class InputHandler {
     if (this.state !== 'aiming') return;
 
     if (this.power > 0.02) {
-      this.onShoot?.(this.aimDirection, this.power);
+      // Don't shoot — go to confirming state, show buttons
+      this.state = 'confirming';
+      this.renderer.showShotButtons();
+    } else {
+      this.state = 'idle';
+      this.power = 0;
     }
-
-    this.state = 'idle';
-    this.power = 0;
   }
 
   private cancelAiming(): void {
-    if (this.state === 'aiming') {
+    if (this.state === 'aiming' || this.state === 'confirming') {
+      this.renderer.hideShotButtons();
       this.state = 'idle';
       this.power = 0;
       this.renderer.clearAimLine();
       this.renderer.drawPowerBar(0);
+      this.onCancelAim?.();
     }
+  }
+
+  private cancelConfirming(): void {
+    this.renderer.hideShotButtons();
+    this.state = 'idle';
+    this.power = 0;
+    this.renderer.clearAimLine();
+    this.renderer.drawPowerBar(0);
+    this.onCancelAim?.();
   }
 
   private updateSpin(pos: Vec2): void {
@@ -347,6 +412,7 @@ export class InputHandler {
   }
 
   resetToIdle(): void {
+    this.renderer.hideShotButtons();
     this.state = 'idle';
     this.isPanning = false;
     this.power = 0;

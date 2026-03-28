@@ -30,6 +30,9 @@ export class Renderer {
   scoreText: PIXI.Text;
   turnText: PIXI.Text;
   pocketedContainer: PIXI.Container;
+  shotButtonsContainer: PIXI.Container;
+  private shootBtnBounds = { x: 0, y: 0, w: 0, h: 0 };
+  private cancelBtnBounds = { x: 0, y: 0, w: 0, h: 0 };
 
   // Camera state
   camX: number = 0;
@@ -54,6 +57,7 @@ export class Renderer {
     this.scoreText = new PIXI.Text('', { fontSize: 18, fill: 0xffffff, fontFamily: 'Arial' });
     this.turnText = new PIXI.Text('', { fontSize: 16, fill: 0xCCCCCC, fontFamily: 'Arial' });
     this.pocketedContainer = new PIXI.Container();
+    this.shotButtonsContainer = new PIXI.Container();
   }
 
   async init(): Promise<void> {
@@ -94,6 +98,8 @@ export class Renderer {
     this.uiContainer.addChild(this.turnText);
 
     this.uiContainer.addChild(this.pocketedContainer);
+    this.shotButtonsContainer.visible = false;
+    this.uiContainer.addChild(this.shotButtonsContainer);
 
     // Fit table to screen initially (rotated for portrait)
     this.fitTableToScreen();
@@ -249,15 +255,15 @@ export class Renderer {
     }
 
     bg.lineStyle(2, 0xFFFFFF, 0.15);
-    const headString = TABLE_HEIGHT * 0.65;
-    bg.moveTo(0, headString);
-    bg.lineTo(TABLE_WIDTH, headString);
+    const headString = TABLE_WIDTH * 0.65;
+    bg.moveTo(headString, 0);
+    bg.lineTo(headString, TABLE_HEIGHT);
 
     bg.beginFill(0xFFFFFF, 0.2);
     bg.drawCircle(TABLE_WIDTH / 2, TABLE_HEIGHT / 2, 4);
     bg.endFill();
     bg.beginFill(0xFFFFFF, 0.2);
-    bg.drawCircle(TABLE_WIDTH / 2, TABLE_HEIGHT * 0.27, 4);
+    bg.drawCircle(TABLE_WIDTH * 0.27, TABLE_HEIGHT / 2, 4);
     bg.endFill();
 
     for (const pocket of pockets) {
@@ -494,6 +500,70 @@ export class Renderer {
       g.position.set(this.screenW - 15 - i * gap, startY);
       this.pocketedContainer.addChild(g);
     }
+  }
+
+  showShotButtons(): void {
+    this.shotButtonsContainer.removeChildren();
+
+    const btnW = 120;
+    const btnH = 50;
+    const gap = 20;
+    const totalW = btnW * 2 + gap;
+    const x0 = (this.screenW - totalW) / 2;
+    const y0 = this.screenH - 70;
+
+    // Shoot button (green)
+    const shootBtn = new PIXI.Graphics();
+    shootBtn.beginFill(0x2E7D32, 0.9);
+    shootBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    shootBtn.endFill();
+    shootBtn.lineStyle(2, 0x4CAF50);
+    shootBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    shootBtn.position.set(x0, y0);
+    const shootLabel = new PIXI.Text('Удар', {
+      fontSize: 22, fill: 0xFFFFFF, fontFamily: 'Arial', fontWeight: 'bold',
+    });
+    shootLabel.anchor.set(0.5);
+    shootLabel.position.set(x0 + btnW / 2, y0 + btnH / 2);
+    this.shotButtonsContainer.addChild(shootBtn, shootLabel);
+    this.shootBtnBounds = { x: x0, y: y0, w: btnW, h: btnH };
+
+    // Cancel button (red)
+    const cancelBtn = new PIXI.Graphics();
+    cancelBtn.beginFill(0xC62828, 0.9);
+    cancelBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    cancelBtn.endFill();
+    cancelBtn.lineStyle(2, 0xEF5350);
+    cancelBtn.drawRoundedRect(0, 0, btnW, btnH, 10);
+    const cx = x0 + btnW + gap;
+    cancelBtn.position.set(cx, y0);
+    const cancelLabel = new PIXI.Text('Отмена', {
+      fontSize: 22, fill: 0xFFFFFF, fontFamily: 'Arial', fontWeight: 'bold',
+    });
+    cancelLabel.anchor.set(0.5);
+    cancelLabel.position.set(cx + btnW / 2, y0 + btnH / 2);
+    this.shotButtonsContainer.addChild(cancelBtn, cancelLabel);
+    this.cancelBtnBounds = { x: cx, y: y0, w: btnW, h: btnH };
+
+    this.shotButtonsContainer.visible = true;
+  }
+
+  hideShotButtons(): void {
+    this.shotButtonsContainer.visible = false;
+    this.shotButtonsContainer.removeChildren();
+  }
+
+  getShotButtonAt(pos: Vec2): 'shoot' | 'cancel' | null {
+    if (!this.shotButtonsContainer.visible) return null;
+    const s = this.shootBtnBounds;
+    if (pos.x >= s.x && pos.x <= s.x + s.w && pos.y >= s.y && pos.y <= s.y + s.h) {
+      return 'shoot';
+    }
+    const c = this.cancelBtnBounds;
+    if (pos.x >= c.x && pos.x <= c.x + c.w && pos.y >= c.y && pos.y <= c.y + c.h) {
+      return 'cancel';
+    }
+    return null;
   }
 
   updateTurn(n: number): void {

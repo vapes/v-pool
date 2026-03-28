@@ -78,8 +78,13 @@ export class Game {
         this.pyramidBroken = true;
       }
 
+      this.renderer.hideShotButtons();
       this.renderer.clearAimLine();
       this.renderer.drawPowerBar(0);
+    };
+
+    this.input.onCancelAim = () => {
+      // Nothing special needed, input already clears aim line
     };
 
     this.input.onAimUpdate = (direction, power) => {
@@ -179,7 +184,7 @@ export class Game {
       const cue = this.physics.balls[0];
       if (cue.isPocketed) {
         cue.isPocketed = false;
-        cue.pos = vec2(TABLE_WIDTH / 2, TABLE_HEIGHT * 0.75);
+        cue.pos = vec2(TABLE_WIDTH * 0.75, TABLE_HEIGHT / 2);
         cue.vel = vec2(0, 0);
         cue.spin = vec2(0, 0);
         this.gameState = 'ball_in_hand';

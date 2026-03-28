@@ -100,10 +100,10 @@ export interface SpinParams {
 export function createBalls(): Ball[] {
   const balls: Ball[] = [];
 
-  // Cue ball - placed at foot spot area
+  // Cue ball - placed at foot end (large X → bottom of screen in portrait)
   balls.push({
     id: 0,
-    pos: vec2(TABLE_WIDTH / 2, TABLE_HEIGHT * 0.75),
+    pos: vec2(TABLE_WIDTH * 0.75, TABLE_HEIGHT / 2),
     vel: vec2(0, 0),
     spin: vec2(0, 0),
     angularVel: vec2(0, 0),
@@ -114,18 +114,19 @@ export function createBalls(): Ball[] {
   });
 
   // 15 balls in triangle (pyramid) at head spot
-  const startX = TABLE_WIDTH / 2;
-  const startY = TABLE_HEIGHT * 0.27;
+  // Pyramid along X axis (small X → top of screen in portrait)
+  const startX = TABLE_WIDTH * 0.27;
+  const startY = TABLE_HEIGHT / 2;
   const spacing = BALL_RADIUS * 2 + 1; // tight rack
   let id = 1;
 
   for (let row = 0; row < 5; row++) {
     const ballsInRow = row + 1;
-    const rowOffsetX = -(row * spacing * Math.sin(Math.PI / 6));
-    const rowY = startY - row * spacing * Math.cos(Math.PI / 6);
+    const rowOffsetY = -(row * spacing * Math.sin(Math.PI / 6));
+    const rowX = startX + row * spacing * Math.cos(Math.PI / 6);
     for (let col = 0; col < ballsInRow; col++) {
-      const x = startX + rowOffsetX + col * spacing;
-      const y = rowY;
+      const x = rowX;
+      const y = startY + rowOffsetY + col * spacing;
       balls.push({
         id,
         pos: vec2(x, y),
