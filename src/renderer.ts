@@ -255,15 +255,15 @@ export class Renderer {
     }
 
     bg.lineStyle(2, 0xFFFFFF, 0.15);
-    const headString = TABLE_HEIGHT * 0.65;
-    bg.moveTo(0, headString);
-    bg.lineTo(TABLE_WIDTH, headString);
+    const headString = TABLE_WIDTH * 0.65;
+    bg.moveTo(headString, 0);
+    bg.lineTo(headString, TABLE_HEIGHT);
 
     bg.beginFill(0xFFFFFF, 0.2);
     bg.drawCircle(TABLE_WIDTH / 2, TABLE_HEIGHT / 2, 4);
     bg.endFill();
     bg.beginFill(0xFFFFFF, 0.2);
-    bg.drawCircle(TABLE_WIDTH / 2, TABLE_HEIGHT * 0.27, 4);
+    bg.drawCircle(TABLE_WIDTH * 0.27, TABLE_HEIGHT / 2, 4);
     bg.endFill();
 
     for (const pocket of pockets) {
