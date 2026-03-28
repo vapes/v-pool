@@ -48,9 +48,8 @@ function showMenu(renderer: Renderer): void {
 }
 
 function startGame(renderer: Renderer, mode: GameMode): void {
-  if (mode === 'vs_computer' || mode === 'puzzles') {
+  if (mode === 'puzzles') {
     renderer.showMessage('Скоро! Пока доступна свободная игра.', 3000);
-    // Fall back to free play after a short delay
     setTimeout(() => {
       const game = new Game(renderer, 'free_play', () => showMenu(renderer));
       game.start();

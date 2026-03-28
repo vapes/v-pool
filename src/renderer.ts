@@ -455,14 +455,17 @@ export class Renderer {
     }
   }
 
-  updatePocketed(p1Balls: number[], p2Balls: number[]): void {
+  updatePocketed(p1Balls: number[], p2Balls: number[], vsComputer: boolean = false): void {
     this.pocketedContainer.removeChildren();
     const ballR = 10;
     const startY = this.screenH - 40;
     const gap = ballR * 2.4;
 
+    const p1Name = vsComputer ? 'Вы' : 'Игрок 1';
+    const p2Name = vsComputer ? 'Комп' : 'Игрок 2';
+
     // Player 1 — left side
-    const p1Label = new PIXI.Text(`Игрок 1: ${p1Balls.length}`, {
+    const p1Label = new PIXI.Text(`${p1Name}: ${p1Balls.length}`, {
       fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
     });
     p1Label.position.set(10, startY - 22);
@@ -483,7 +486,7 @@ export class Renderer {
     }
 
     // Player 2 — right side
-    const p2Label = new PIXI.Text(`Игрок 2: ${p2Balls.length}`, {
+    const p2Label = new PIXI.Text(`${p2Name}: ${p2Balls.length}`, {
       fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
     });
     p2Label.anchor.set(1, 0);
@@ -664,8 +667,8 @@ export class Renderer {
     return 1 - (clamped - barY) / barHeight;
   }
 
-  updateTurn(n: number): void {
-    this.turnText.text = `Ход: Игрок ${n}`;
+  updateTurn(n: number, label?: string): void {
+    this.turnText.text = label ? `Ход: ${label}` : `Ход: Игрок ${n}`;
   }
 
   resetView(): void {

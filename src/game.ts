@@ -5,17 +5,20 @@ import {
 } from './physics';
 import { Renderer } from './renderer';
 import { InputHandler } from './input';
+import { AI } from './ai';
 import type { GameMode } from './main';
 
-type GameState = 'waiting' | 'simulating' | 'ball_in_hand' | 'game_over';
+type GameState = 'waiting' | 'simulating' | 'ball_in_hand' | 'game_over' | 'ai_thinking';
 
 export class Game {
   private physics: PhysicsEngine;
   private renderer: Renderer;
   private input!: InputHandler;
+  private ai: AI | null = null;
   private mode: GameMode;
   private onBackToMenu: () => void;
   private tickerFn: (() => void) | null = null;
+  private aiTimeoutId: number | null = null;
 
   private gameState: GameState = 'waiting';
   private currentPlayer: number = 1;
@@ -31,15 +34,25 @@ export class Game {
     this.mode = mode;
     this.onBackToMenu = onBackToMenu;
     this.activeBall = balls[0];
+    if (mode === 'vs_computer') {
+      this.ai = new AI(0.6);
+    }
   }
 
   start(): void {
     this.input = new InputHandler(this.renderer);
     this.renderer.drawTable(this.physics.pockets);
     this.renderer.createBallGraphics(this.physics.balls);
-    this.renderer.updatePocketed([], []);
-    this.renderer.updateTurn(1);
-    this.renderer.showMessage('Свободная пирамида — бейте битком', 3000);
+    this.renderer.updatePocketed([], [], this.mode === 'vs_computer');
+    if (this.mode === 'vs_computer') {
+      this.renderer.updateTurn(1, 'Вы');
+    } else {
+      this.renderer.updateTurn(1);
+    }
+    const msg = this.mode === 'vs_computer'
+      ? 'Вы играете белыми. Ваш ход!'
+      : 'Свободная пирамида — бейте битком';
+    this.renderer.showMessage(msg, 3000);
 
     this.setupInputCallbacks();
     this.tickerFn = () => this.update();
@@ -51,13 +64,81 @@ export class Game {
       this.renderer.app.ticker.remove(this.tickerFn);
       this.tickerFn = null;
     }
+    if (this.aiTimeoutId !== null) {
+      clearTimeout(this.aiTimeoutId);
+      this.aiTimeoutId = null;
+    }
     this.renderer.clearGame();
     this.input.destroy();
   }
 
+  private isAiTurn(): boolean {
+    return this.mode === 'vs_computer' && this.currentPlayer === 2;
+  }
+
+  private triggerAiTurn(): void {
+    if (!this.ai) return;
+    this.gameState = 'ai_thinking';
+    this.renderer.showMessage('Компьютер думает...', 0);
+
+    this.aiTimeoutId = window.setTimeout(() => {
+      this.aiTimeoutId = null;
+      if (this.gameState !== 'ai_thinking') return;
+
+      const shot = this.ai!.findBestShot(
+        this.physics.balls, this.physics.pockets, this.pyramidBroken
+      );
+
+      this.activeBall = shot.striker;
+
+      // Show aim line briefly
+      const traj = this.physics.predictTrajectory(
+        shot.striker.pos, shot.direction, shot.power, 200, shot.striker.id
+      );
+      this.renderer.drawAimLine(traj, shot.power);
+      this.renderer.drawPowerBar(shot.power);
+
+      // Execute shot after showing aim line
+      this.aiTimeoutId = window.setTimeout(() => {
+        this.aiTimeoutId = null;
+        this.physics.resetTurnTracking();
+        this.physics.activeBallId = shot.striker.id;
+        shootCueBall(shot.striker, shot.direction, shot.power, shot.spin);
+        this.gameState = 'simulating';
+
+        if (!this.pyramidBroken) this.pyramidBroken = true;
+
+        this.renderer.clearAimLine();
+        this.renderer.drawPowerBar(0);
+      }, 800);
+    }, 1000 + Math.random() * 500);
+  }
+
+  private triggerAiBallInHand(): void {
+    if (!this.ai) return;
+    this.gameState = 'ai_thinking';
+    this.renderer.showMessage('Компьютер ставит биток...', 0);
+
+    this.aiTimeoutId = window.setTimeout(() => {
+      this.aiTimeoutId = null;
+      const pos = this.ai!.findBallInHandPosition(
+        this.physics.balls, this.physics.pockets
+      );
+      const cue = this.physics.balls[0];
+      cue.pos = pos;
+      cue.isPocketed = false;
+      cue.vel = vec2(0, 0);
+      cue.spin = vec2(0, 0);
+      this.activeBall = cue;
+
+      // Now take a shot
+      this.triggerAiTurn();
+    }, 800);
+  }
+
   private setupInputCallbacks(): void {
     this.input.findBallAtScreen = (screenPos: Vec2): Vec2 | null => {
-      if (this.gameState !== 'waiting') return null;
+      if (this.gameState !== 'waiting' || this.isAiTurn()) return null;
 
       const hitRadius = Math.max(30, BALL_RADIUS * this.renderer.camZoom + 20);
 
@@ -159,37 +240,32 @@ export class Game {
     if (pocketed.length === 0 && this.physics.firstHitBallId === -1) {
       this.renderer.showMessage('Фол! Нет касания', 2500);
       this.switchPlayer();
-      this.gameState = 'waiting';
-      this.activeBall = this.physics.balls[0];
-      this.input.resetToIdle();
+      this.startTurn();
       return;
     }
 
     if (pocketed.length > 0) {
-      // All pocketed balls go to the current player's score
-      // In Russian billiards (свободная пирамида):
-      // - You CAN pocket the cue ball (свояк) — it counts!
-      // - You CAN pocket the ball you're hitting with — it counts!
-      // - Any ball going into a pocket scores for the current player
       for (const id of pocketed) {
         this.pocketedByPlayer[this.currentPlayer - 1].push(id);
       }
 
       this.renderer.updatePocketed(
         this.pocketedByPlayer[0],
-        this.pocketedByPlayer[1]
+        this.pocketedByPlayer[1],
+        this.mode === 'vs_computer'
       );
 
+      const playerName = this.isAiTurn() ? 'Компьютер' : `Игрок ${this.currentPlayer}`;
       const count = pocketed.length;
       const word = count === 1 ? 'шар' : (count < 5 ? 'шара' : 'шаров');
-      this.renderer.showMessage(
-        `Игрок ${this.currentPlayer}: +${count} ${word}!`, 2000
-      );
+      this.renderer.showMessage(`${playerName}: +${count} ${word}!`, 2000);
 
       // Check win (first to 8)
       if (this.pocketedByPlayer[this.currentPlayer - 1].length >= 8) {
         this.gameState = 'game_over';
-        this.renderer.showMessage(`Игрок ${this.currentPlayer} победил!`, 0);
+        const winner = this.isAiTurn() ? 'Компьютер победил!' : 'Вы победили!';
+        const winMsg = this.mode === 'vs_computer' ? winner : `Игрок ${this.currentPlayer} победил!`;
+        this.renderer.showMessage(winMsg, 0);
         setTimeout(() => this.resetGame(), 5000);
         return;
       }
@@ -201,29 +277,53 @@ export class Game {
         cue.pos = vec2(TABLE_WIDTH * 0.25, TABLE_HEIGHT / 2);
         cue.vel = vec2(0, 0);
         cue.spin = vec2(0, 0);
-        this.gameState = 'ball_in_hand';
-        this.input.enableBallInHand();
-        this.renderer.showMessage('Поставьте биток', 0);
-        // Player continues (scored, no foul)
+
+        if (this.isAiTurn()) {
+          this.triggerAiBallInHand();
+        } else {
+          this.gameState = 'ball_in_hand';
+          this.input.enableBallInHand();
+          this.renderer.showMessage('Поставьте биток', 0);
+        }
         return;
       }
 
       // Player scored — continues shooting
-      this.gameState = 'waiting';
-      this.activeBall = this.physics.balls[0];
-      this.input.resetToIdle();
+      this.continueTurn();
     } else {
       // Nothing pocketed — switch player
       this.switchPlayer();
+      this.startTurn();
+    }
+  }
+
+  private startTurn(): void {
+    this.activeBall = this.physics.balls[0];
+    if (this.isAiTurn()) {
+      this.triggerAiTurn();
+    } else {
       this.gameState = 'waiting';
-      this.activeBall = this.physics.balls[0];
+      this.input.resetToIdle();
+    }
+  }
+
+  private continueTurn(): void {
+    this.activeBall = this.physics.balls[0];
+    if (this.isAiTurn()) {
+      this.triggerAiTurn();
+    } else {
+      this.gameState = 'waiting';
       this.input.resetToIdle();
     }
   }
 
   private switchPlayer(): void {
     this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
-    this.renderer.updateTurn(this.currentPlayer);
+    if (this.mode === 'vs_computer') {
+      this.renderer.updateTurn(this.currentPlayer, this.currentPlayer === 1 ? 'Вы' : 'Компьютер');
+    } else {
+      this.renderer.updateTurn(this.currentPlayer);
+    }
   }
 
   private resetGame(): void {
