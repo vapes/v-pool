@@ -180,6 +180,7 @@ export class PhysicsEngine {
   pocketedThisTurn: number[] = [];
   firstHitBallId: number = -1;
   cushionHits: number = 0;
+  activeBallId: number = 0; // which ball is being struck (any ball in Russian billiards)
   private substeps = 4;
 
   constructor(balls: Ball[], pockets: Pocket[]) {
@@ -261,10 +262,10 @@ export class PhysicsEngine {
         const minDist = a.radius + b.radius;
 
         if (dist < minDist) {
-          // Track first hit for cue ball
+          // Track first hit for the active (struck) ball
           if (this.firstHitBallId === -1) {
-            if (a.isCue) this.firstHitBallId = b.id;
-            else if (b.isCue) this.firstHitBallId = a.id;
+            if (a.id === this.activeBallId) this.firstHitBallId = b.id;
+            else if (b.id === this.activeBallId) this.firstHitBallId = a.id;
           }
 
           // Separate overlapping balls
@@ -286,11 +287,11 @@ export class PhysicsEngine {
             b.vel = vecAdd(b.vel, vecScale(impulseVec, 1 / b.mass));
 
             // Transfer some spin on collision (throw effect)
-            if (a.isCue && vecLen(a.spin) > 0.1) {
+            if (a.id === this.activeBallId && vecLen(a.spin) > 0.1) {
               const spinTransfer = 0.3;
               b.spin = vecAdd(b.spin, vecScale(a.spin, spinTransfer));
               a.spin = vecScale(a.spin, 1 - spinTransfer);
-            } else if (b.isCue && vecLen(b.spin) > 0.1) {
+            } else if (b.id === this.activeBallId && vecLen(b.spin) > 0.1) {
               const spinTransfer = 0.3;
               a.spin = vecAdd(a.spin, vecScale(b.spin, spinTransfer));
               b.spin = vecScale(b.spin, 1 - spinTransfer);
@@ -382,7 +383,7 @@ export class PhysicsEngine {
   }
 
   // Predict trajectory for aim line
-  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 150): Vec2[] {
+  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 150, skipBallId: number = 0): Vec2[] {
     const points: Vec2[] = [{ ...startPos }];
     const vel = vecScale(direction, power * MAX_SHOT_POWER);
     let pos = { ...startPos };
@@ -394,7 +395,7 @@ export class PhysicsEngine {
       // Check ball collision
       let hitBall = false;
       for (const ball of this.balls) {
-        if (ball.isPocketed || ball.isCue) continue;
+        if (ball.isPocketed || ball.id === skipBallId) continue;
         if (vecDist(pos, ball.pos) < BALL_RADIUS * 2) {
           points.push({ ...pos });
           hitBall = true;

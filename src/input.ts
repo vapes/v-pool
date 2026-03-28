@@ -19,6 +19,8 @@ export class InputHandler {
   onAimUpdate: ((direction: Vec2, power: number) => void) | null = null;
   onSpinChange: ((x: number, y: number) => void) | null = null;
   onBallInHandPlace: ((pos: Vec2) => void) | null = null;
+  // Called to find which ball is at screen position; returns ball screen pos or null
+  findBallAtScreen: ((pos: Vec2) => Vec2 | null) | null = null;
 
   // Multi-touch tracking
   private activeTouches: Map<number, Vec2> = new Map();
@@ -81,7 +83,17 @@ export class InputHandler {
     return Math.sqrt(dx * dx + dy * dy) < bounds.size / 2 + 15;
   }
 
-  private isTouchOnCueBall(pos: Vec2): boolean {
+  private isTouchOnAnyBall(pos: Vec2): boolean {
+    // First check via callback (game decides which balls are hittable)
+    if (this.findBallAtScreen) {
+      const ballPos = this.findBallAtScreen(pos);
+      if (ballPos) {
+        this.cueBallScreenPos = ballPos;
+        return true;
+      }
+      return false;
+    }
+    // Fallback: check cue ball only
     const dist = vecLen(vecSub(pos, this.cueBallScreenPos));
     const hitRadius = Math.max(30, BALL_RADIUS * this.renderer.camZoom + 20);
     return dist < hitRadius;
@@ -228,8 +240,8 @@ export class InputHandler {
       return;
     }
 
-    // Check cue ball
-    if (this.isTouchOnCueBall(pos)) {
+    // Check if touching any hittable ball
+    if (this.isTouchOnAnyBall(pos)) {
       this.state = 'aiming';
       this.lastPanPos = { ...pos };
       // Show initial aim line immediately (default direction from cue ball)
