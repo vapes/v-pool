@@ -332,20 +332,33 @@ export class Renderer {
   drawAimLine(points: Vec2[], power: number): void {
     this.aimLine.clear();
     if (points.length < 2) return;
-    const maxAlpha = Math.min(0.8, power * 1.5);
+
+    // Always visible, even at low power
+    const maxAlpha = Math.max(0.4, Math.min(0.9, power * 2));
+    const baseWidth = 4; // thicker for mobile visibility
+
     for (let i = 0; i < points.length - 1; i++) {
-      const alpha = maxAlpha * (1 - i / points.length);
-      const width = Math.max(1, 3 - (i / points.length) * 2);
+      const t = i / points.length;
+      const alpha = maxAlpha * (1 - t * 0.7);
+      const width = Math.max(2, baseWidth * (1 - t * 0.5));
+
       if (i >= points.length - 3 && points.length > 5) {
-        this.aimLine.lineStyle(width, 0xFFAA00, alpha * 0.7);
+        // Object ball prediction — orange
+        this.aimLine.lineStyle(width, 0xFFAA00, alpha * 0.8);
       } else {
         this.aimLine.lineStyle(width, AIM_LINE_COLOR, alpha);
       }
+
+      // Dashed line
       if (i % 3 !== 2) {
         this.aimLine.moveTo(points[i].x, points[i].y);
         this.aimLine.lineTo(points[i + 1].x, points[i + 1].y);
       }
     }
+
+    // Draw a small circle at the cue ball position to indicate aim origin
+    this.aimLine.lineStyle(2, AIM_LINE_COLOR, maxAlpha);
+    this.aimLine.drawCircle(points[0].x, points[0].y, BALL_RADIUS + 4);
   }
 
   clearAimLine(): void { this.aimLine.clear(); }

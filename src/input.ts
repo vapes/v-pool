@@ -231,6 +231,9 @@ export class InputHandler {
     // Check cue ball
     if (this.isTouchOnCueBall(pos)) {
       this.state = 'aiming';
+      this.lastPanPos = { ...pos };
+      // Show initial aim line immediately (default direction from cue ball)
+      this.updateAimFromScreenPos(pos);
       return;
     }
 
@@ -257,14 +260,17 @@ export class InputHandler {
 
     if (this.state !== 'aiming') return;
 
-    // Aiming: direction from touch to cue ball (pulling back)
+    this.updateAimFromScreenPos(pos);
+  }
+
+  private updateAimFromScreenPos(pos: Vec2): void {
+    // Direction: from touch point to cue ball (we're pulling back)
     const dragVec = vecSub(this.cueBallScreenPos, pos);
     const dragDist = vecLen(dragVec);
 
-    if (dragDist > 10) {
-      // Screen direction -> table direction
+    if (dragDist > 5) {
+      // Screen direction -> table direction (undo camera rotation)
       const screenDir = vecNorm(dragVec);
-      // Rotate screen direction by negative camera rotation to get table direction
       const cos = Math.cos(-this.renderer.camRotation);
       const sin = Math.sin(-this.renderer.camRotation);
       this.aimDirection = vec2(
