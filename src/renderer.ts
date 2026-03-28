@@ -333,17 +333,18 @@ export class Renderer {
     this.aimLine.clear();
     if (points.length < 2) return;
 
-    // Always visible, even at low power
-    const maxAlpha = Math.max(0.4, Math.min(0.9, power * 2));
-    const baseWidth = 4; // thicker for mobile visibility
+    // Line is drawn in table coords but rendered through camZoom.
+    // Compensate so it looks ~3-4px on screen regardless of zoom.
+    const pxInTable = 1 / this.camZoom; // 1 screen pixel in table units
+    const maxAlpha = Math.max(0.5, Math.min(0.9, power * 2));
+    const baseWidth = pxInTable * 4;
 
     for (let i = 0; i < points.length - 1; i++) {
       const t = i / points.length;
       const alpha = maxAlpha * (1 - t * 0.7);
-      const width = Math.max(2, baseWidth * (1 - t * 0.5));
+      const width = Math.max(pxInTable * 2, baseWidth * (1 - t * 0.5));
 
       if (i >= points.length - 3 && points.length > 5) {
-        // Object ball prediction — orange
         this.aimLine.lineStyle(width, 0xFFAA00, alpha * 0.8);
       } else {
         this.aimLine.lineStyle(width, AIM_LINE_COLOR, alpha);
@@ -356,9 +357,9 @@ export class Renderer {
       }
     }
 
-    // Draw a small circle at the cue ball position to indicate aim origin
-    this.aimLine.lineStyle(2, AIM_LINE_COLOR, maxAlpha);
-    this.aimLine.drawCircle(points[0].x, points[0].y, BALL_RADIUS + 4);
+    // Circle around cue ball
+    this.aimLine.lineStyle(pxInTable * 2, AIM_LINE_COLOR, maxAlpha);
+    this.aimLine.drawCircle(points[0].x, points[0].y, BALL_RADIUS + pxInTable * 6);
   }
 
   clearAimLine(): void { this.aimLine.clear(); }
