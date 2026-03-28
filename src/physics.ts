@@ -64,13 +64,14 @@ export const CUSHION_RESTITUTION = 0.75;
 export const BALL_RESTITUTION = 0.95;
 
 // Friction: deceleration in velocity-units per frame
-// At max power (45 units/frame), ball should roll ~3-4 seconds (180-240 frames)
-// So deceleration ≈ 45/200 ≈ 0.22 per frame
-export const FRICTION_DECEL = 0.22;
+// At max power ball should roll ~4-5 seconds (240-300 frames)
+export const FRICTION_DECEL = 0.15;
 export const SPIN_DECAY = 0.985;
 
 // Maximum shot power (velocity in mm/frame at 60fps)
-export const MAX_SHOT_POWER = 45;
+// Real break shot: ~8-10 m/s = 480-600 mm/s ÷ 60fps = 8-10 mm/frame
+// But we use higher value for game feel on a 3550mm table
+export const MAX_SHOT_POWER = 200;
 
 export interface Ball {
   id: number;
@@ -162,8 +163,8 @@ export function shootCueBall(ball: Ball, direction: Vec2, power: number, spin: S
 
   // Apply spin - side spin affects angular velocity
   // top/back spin affects forward roll
-  ball.spin = vec2(spin.x * power * 15, spin.y * power * 15);
-  ball.angularVel = vec2(spin.x * power * 8, spin.y * power * 8);
+  ball.spin = vec2(spin.x * power * 40, spin.y * power * 40);
+  ball.angularVel = vec2(spin.x * power * 20, spin.y * power * 20);
 }
 
 export function isMoving(balls: Ball[]): boolean {
@@ -181,7 +182,7 @@ export class PhysicsEngine {
   firstHitBallId: number = -1;
   cushionHits: number = 0;
   activeBallId: number = 0; // which ball is being struck (any ball in Russian billiards)
-  private substeps = 4;
+  private substeps = 8;
 
   constructor(balls: Ball[], pockets: Pocket[]) {
     this.balls = balls;
@@ -383,14 +384,15 @@ export class PhysicsEngine {
   }
 
   // Predict trajectory for aim line
-  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 150, skipBallId: number = 0): Vec2[] {
+  predictTrajectory(startPos: Vec2, direction: Vec2, power: number, maxSteps: number = 200, skipBallId: number = 0): Vec2[] {
     const points: Vec2[] = [{ ...startPos }];
     const vel = vecScale(direction, power * MAX_SHOT_POWER);
     let pos = { ...startPos };
     let currentVel = { ...vel };
+    const stepDt = 0.125; // small step for accuracy at high speeds
 
     for (let i = 0; i < maxSteps; i++) {
-      pos = vecAdd(pos, vecScale(currentVel, 0.25));
+      pos = vecAdd(pos, vecScale(currentVel, stepDt));
 
       // Check ball collision
       let hitBall = false;
@@ -404,7 +406,7 @@ export class PhysicsEngine {
           const normal = vecNorm(vecSub(pos, ball.pos));
           const targetDir = vecScale(normal, -1);
           // Show where the object ball would go
-          const objBallEnd = vecAdd(ball.pos, vecScale(targetDir, 80));
+          const objBallEnd = vecAdd(ball.pos, vecScale(targetDir, 200));
           points.push({ ...ball.pos });
           points.push(objBallEnd);
           return points;
@@ -422,10 +424,10 @@ export class PhysicsEngine {
         pos.y = Math.max(BALL_RADIUS, Math.min(TABLE_HEIGHT - BALL_RADIUS, pos.y));
       }
 
-      // Friction (same formula as stepPhysics, dt=0.25 per prediction step)
+      // Friction
       const speed = vecLen(currentVel);
       if (speed > 0.3) {
-        const frictionDecel = FRICTION_DECEL * 0.25;
+        const frictionDecel = FRICTION_DECEL * stepDt;
         const newSpeed = Math.max(0, speed - frictionDecel);
         currentVel = vecScale(vecNorm(currentVel), newSpeed);
       } else {
