@@ -458,7 +458,8 @@ export class Renderer {
   updatePocketed(p1Balls: number[], p2Balls: number[], vsComputer: boolean = false): void {
     this.pocketedContainer.removeChildren();
     const ballR = 10;
-    const startY = this.screenH - 40;
+    const labelY = this.screenH - 58;
+    const ballY = this.screenH - 30;
     const gap = ballR * 2.4;
 
     const p1Name = vsComputer ? 'Вы' : 'Игрок 1';
@@ -468,7 +469,7 @@ export class Renderer {
     const p1Label = new PIXI.Text(`${p1Name}: ${p1Balls.length}`, {
       fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
     });
-    p1Label.position.set(10, startY - 22);
+    p1Label.position.set(10, labelY);
     this.pocketedContainer.addChild(p1Label);
 
     for (let i = 0; i < p1Balls.length; i++) {
@@ -481,7 +482,7 @@ export class Renderer {
       });
       num.anchor.set(0.5);
       g.addChild(num);
-      g.position.set(15 + i * gap, startY);
+      g.position.set(15 + i * gap, ballY);
       this.pocketedContainer.addChild(g);
     }
 
@@ -490,7 +491,7 @@ export class Renderer {
       fontSize: 14, fill: 0xFFFFFF, fontFamily: 'Arial',
     });
     p2Label.anchor.set(1, 0);
-    p2Label.position.set(this.screenW - 10, startY - 22);
+    p2Label.position.set(this.screenW - 10, labelY);
     this.pocketedContainer.addChild(p2Label);
 
     for (let i = 0; i < p2Balls.length; i++) {
@@ -503,7 +504,7 @@ export class Renderer {
       });
       num.anchor.set(0.5);
       g.addChild(num);
-      g.position.set(this.screenW - 15 - i * gap, startY);
+      g.position.set(this.screenW - 15 - i * gap, ballY);
       this.pocketedContainer.addChild(g);
     }
   }
