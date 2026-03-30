@@ -36,6 +36,12 @@ export class Renderer {
   menuContainer: PIXI.Container;
   private menuBtnBounds: { x: number; y: number; w: number; h: number; mode: string }[] = [];
   penaltyHighlight: PIXI.Graphics;
+  private aimAdjustContainer: PIXI.Container;
+  private aimAdjustBtnBounds = {
+    left: { x: 0, y: 0, r: 40 },
+    right: { x: 0, y: 0, r: 40 },
+  };
+  private aimAdjustVisible = false;
 
   // Camera state
   camX: number = 0;
@@ -63,6 +69,7 @@ export class Renderer {
     this.shotButtonsContainer = new PIXI.Container();
     this.menuContainer = new PIXI.Container();
     this.penaltyHighlight = new PIXI.Graphics();
+    this.aimAdjustContainer = new PIXI.Container();
   }
 
   async init(): Promise<void> {
@@ -105,6 +112,8 @@ export class Renderer {
     this.uiContainer.addChild(this.pocketedContainer);
     this.shotButtonsContainer.visible = false;
     this.uiContainer.addChild(this.shotButtonsContainer);
+    this.aimAdjustContainer.visible = false;
+    this.uiContainer.addChild(this.aimAdjustContainer);
 
     // Fit table to screen initially (rotated for portrait)
     this.fitTableToScreen();
@@ -637,6 +646,7 @@ export class Renderer {
   hideShotButtons(): void {
     this.shotButtonsContainer.visible = false;
     this.shotButtonsContainer.removeChildren();
+    this.hideAimAdjustButtons();
   }
 
   getShotButtonAt(pos: Vec2): 'shoot' | null {
@@ -670,6 +680,79 @@ export class Renderer {
     const barY = this.screenH - barHeight - 100;
     const clamped = Math.max(barY, Math.min(barY + barHeight, screenY));
     return 1 - (clamped - barY) / barHeight;
+  }
+
+  // Show triangular left/right aim-adjust buttons near the ball
+  showAimAdjustButtons(ballScreenPos: Vec2, aimDirTable: Vec2): void {
+    this.aimAdjustContainer.removeChildren();
+
+    const cos = Math.cos(this.camRotation);
+    const sin = Math.sin(this.camRotation);
+    // Table direction → screen direction
+    const sdx = aimDirTable.x * cos - aimDirTable.y * sin;
+    const sdy = aimDirTable.x * sin + aimDirTable.y * cos;
+
+    // Perpendicular directions in screen space (y-down)
+    // perpLeft = rotate screenDir +90° visually → (sdy, -sdx)
+    const perpLeft = { x: sdy, y: -sdx };
+    const perpRight = { x: -sdy, y: sdx };
+
+    const dist = 80;
+    const btnR = 28;
+
+    const leftPos = vec2(
+      ballScreenPos.x + perpLeft.x * dist,
+      ballScreenPos.y + perpLeft.y * dist,
+    );
+    const rightPos = vec2(
+      ballScreenPos.x + perpRight.x * dist,
+      ballScreenPos.y + perpRight.y * dist,
+    );
+
+    this.drawAimAdjustBtn(leftPos, perpLeft, btnR);
+    this.drawAimAdjustBtn(rightPos, perpRight, btnR);
+
+    this.aimAdjustBtnBounds.left = { x: leftPos.x, y: leftPos.y, r: btnR + 14 };
+    this.aimAdjustBtnBounds.right = { x: rightPos.x, y: rightPos.y, r: btnR + 14 };
+    this.aimAdjustVisible = true;
+    this.aimAdjustContainer.visible = true;
+  }
+
+  private drawAimAdjustBtn(pos: Vec2, dir: Vec2, r: number): void {
+    const g = new PIXI.Graphics();
+    // Circle background
+    g.beginFill(0x0D47A1, 0.88);
+    g.drawCircle(0, 0, r);
+    g.endFill();
+    g.lineStyle(2, 0x42A5F5, 1);
+    g.drawCircle(0, 0, r);
+    // Triangle pointing in dir
+    const angle = Math.atan2(dir.y, dir.x);
+    const tr = r * 0.52;
+    const x0 = Math.cos(angle) * tr,        y0 = Math.sin(angle) * tr;
+    const x1 = Math.cos(angle + 2.2) * tr * 0.75, y1 = Math.sin(angle + 2.2) * tr * 0.75;
+    const x2 = Math.cos(angle - 2.2) * tr * 0.75, y2 = Math.sin(angle - 2.2) * tr * 0.75;
+    g.beginFill(0xFFFFFF, 0.95);
+    g.drawPolygon([x0, y0, x1, y1, x2, y2]);
+    g.endFill();
+    g.position.set(pos.x, pos.y);
+    this.aimAdjustContainer.addChild(g);
+  }
+
+  hideAimAdjustButtons(): void {
+    this.aimAdjustContainer.removeChildren();
+    this.aimAdjustContainer.visible = false;
+    this.aimAdjustVisible = false;
+  }
+
+  // Returns 'left', 'right', or null if not tapped
+  getAimAdjustButtonAt(pos: Vec2): 'left' | 'right' | null {
+    if (!this.aimAdjustVisible) return null;
+    const l = this.aimAdjustBtnBounds.left;
+    const rr = this.aimAdjustBtnBounds.right;
+    if (Math.hypot(pos.x - l.x, pos.y - l.y) < l.r) return 'left';
+    if (Math.hypot(pos.x - rr.x, pos.y - rr.y) < rr.r) return 'right';
+    return null;
   }
 
   // Highlight all available balls during штрафной selection

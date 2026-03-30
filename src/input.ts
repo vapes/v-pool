@@ -252,6 +252,18 @@ export class InputHandler {
 
     // In confirming state: check button, power bar, spin, or ball tap
     if (this.state === 'confirming') {
+      // Check aim adjust arrows first (fine-tune aim by ±0.5°)
+      const adjBtn = this.renderer.getAimAdjustButtonAt(pos);
+      if (adjBtn !== null) {
+        const step = Math.PI / 360; // 0.5° per tap
+        const angle = Math.atan2(this.aimDirection.y, this.aimDirection.x);
+        const newAngle = adjBtn === 'left' ? angle - step : angle + step;
+        this.aimDirection = vec2(Math.cos(newAngle), Math.sin(newAngle));
+        this.onAimUpdate?.(this.aimDirection, this.power);
+        this.renderer.showAimAdjustButtons(this.cueBallScreenPos, this.aimDirection);
+        return;
+      }
+
       // Check shoot button
       const btn = this.renderer.getShotButtonAt(pos);
       if (btn === 'shoot') {
@@ -393,6 +405,7 @@ export class InputHandler {
       // Don't shoot — go to confirming state, show buttons
       this.state = 'confirming';
       this.renderer.showShotButtons();
+      this.renderer.showAimAdjustButtons(this.cueBallScreenPos, this.aimDirection);
     } else {
       this.state = 'idle';
       this.power = 0;
