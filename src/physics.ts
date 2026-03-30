@@ -427,13 +427,13 @@ export class PhysicsEngine {
           const hitDir = vecNorm(vecSub(ball.pos, contactPos));
           const objSpeed = vecDot(currentVel, hitDir) * BALL_RESTITUTION;
           const objVel = vecScale(hitDir, objSpeed);
-          const objEnd = vecAdd(ball.pos, vecScale(vecNorm(objVel), 300));
+          const objEnd = vecAdd(ball.pos, vecScale(vecNorm(objVel), 600));
           objectBallDir = [{ ...ball.pos }, objEnd];
 
           // Cue ball deflects: subtract the component transferred to object ball
           const cueAfter = vecSub(currentVel, vecScale(hitDir, vecDot(currentVel, hitDir)));
           if (vecLen(cueAfter) > 0.5) {
-            const deflEnd = vecAdd(contactPos, vecScale(vecNorm(cueAfter), 200));
+            const deflEnd = vecAdd(contactPos, vecScale(vecNorm(cueAfter), 400));
             cueDeflection = [{ ...contactPos }, deflEnd];
           }
 
