@@ -35,6 +35,7 @@ export class Renderer {
 
   menuContainer: PIXI.Container;
   private menuBtnBounds: { x: number; y: number; w: number; h: number; mode: string }[] = [];
+  penaltyHighlight: PIXI.Graphics;
 
   // Camera state
   camX: number = 0;
@@ -61,6 +62,7 @@ export class Renderer {
     this.pocketedContainer = new PIXI.Container();
     this.shotButtonsContainer = new PIXI.Container();
     this.menuContainer = new PIXI.Container();
+    this.penaltyHighlight = new PIXI.Graphics();
   }
 
   async init(): Promise<void> {
@@ -330,6 +332,8 @@ export class Renderer {
       this.tableContainer.addChild(container);
       this.ballGraphics.set(ball.id, container);
     }
+    // Highlight layer on top of all balls (for penalty selection)
+    this.tableContainer.addChild(this.penaltyHighlight);
   }
 
   updateBalls(balls: Ball[]): void {
@@ -668,6 +672,21 @@ export class Renderer {
     return 1 - (clamped - barY) / barHeight;
   }
 
+  // Highlight all available balls during штрафной selection
+  drawPenaltyHighlight(balls: Ball[]): void {
+    this.penaltyHighlight.clear();
+    const px = 1 / this.camZoom;
+    for (const ball of balls) {
+      if (ball.isPocketed) continue;
+      this.penaltyHighlight.lineStyle(px * 3, 0x4CAF50, 0.9);
+      this.penaltyHighlight.drawCircle(ball.pos.x, ball.pos.y, ball.radius + px * 5);
+    }
+  }
+
+  clearPenaltyHighlight(): void {
+    this.penaltyHighlight.clear();
+  }
+
   updateTurn(n: number, label?: string): void {
     this.turnText.text = label ? `Ход: ${label}` : `Ход: Игрок ${n}`;
   }
@@ -681,6 +700,7 @@ export class Renderer {
     this.tableContainer.removeChildren();
     this.tableContainer.addChild(this.aimLine);
     this.aimLine.clear();
+    this.penaltyHighlight.clear();
     this.powerBar.clear();
     this.ballGraphics.clear();
     this.hideShotButtons();

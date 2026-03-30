@@ -1,7 +1,7 @@
 import { Vec2, vec2, vecSub, vecLen, vecNorm, BALL_RADIUS } from './physics';
 import { Renderer } from './renderer';
 
-export type InputState = 'idle' | 'aiming' | 'confirming' | 'spinning' | 'panning' | 'gesturing' | 'ball_in_hand';
+export type InputState = 'idle' | 'aiming' | 'confirming' | 'spinning' | 'panning' | 'gesturing' | 'penalty_selection';
 
 export class InputHandler {
   private renderer: Renderer;
@@ -18,10 +18,13 @@ export class InputHandler {
   onShoot: ((direction: Vec2, power: number) => void) | null = null;
   onAimUpdate: ((direction: Vec2, power: number) => void) | null = null;
   onSpinChange: ((x: number, y: number) => void) | null = null;
-  onBallInHandPlace: ((pos: Vec2) => void) | null = null;
   onCancelAim: (() => void) | null = null;
   // Called to find which ball is at screen position; returns ball screen pos or null
   findBallAtScreen: ((pos: Vec2) => Vec2 | null) | null = null;
+  // Called during penalty selection to identify which ball was tapped; returns ball id or null
+  findBallIdAtScreen: ((pos: Vec2) => number | null) | null = null;
+  // Called when opponent selects a штрафной ball by id
+  onPenaltyBallSelect: ((ballId: number) => void) | null = null;
 
   // Multi-touch tracking
   private activeTouches: Map<number, Vec2> = new Map();
@@ -237,9 +240,13 @@ export class InputHandler {
 
   // --- Single finger ---
   private handleSingleStart(pos: Vec2): void {
-    if (this.state === 'ball_in_hand') {
-      const tablePos = this.renderer.screenToTable(pos.x, pos.y);
-      this.onBallInHandPlace?.(tablePos);
+    // Penalty selection: tap any ball to claim it as штрафной
+    if (this.state === 'penalty_selection') {
+      const ballId = this.findBallIdAtScreen?.(pos);
+      if (ballId !== null && ballId !== undefined) {
+        this.onPenaltyBallSelect?.(ballId);
+        this.state = 'idle';
+      }
       return;
     }
 
@@ -436,8 +443,9 @@ export class InputHandler {
     this.onSpinChange?.(sx, sy);
   }
 
-  enableBallInHand(): void {
-    this.state = 'ball_in_hand';
+  // Enter penalty selection mode: next tap selects штрафной ball
+  enablePenaltySelection(): void {
+    this.state = 'penalty_selection';
   }
 
   resetToIdle(): void {

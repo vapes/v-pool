@@ -8,7 +8,8 @@ import { InputHandler } from './input';
 import { AI } from './ai';
 import type { GameMode } from './main';
 
-type GameState = 'waiting' | 'simulating' | 'ball_in_hand' | 'game_over' | 'ai_thinking';
+// penalty_selection: opponent chooses a штрафной ball after foul
+type GameState = 'waiting' | 'simulating' | 'penalty_selection' | 'game_over' | 'ai_thinking';
 
 export class Game {
   private physics: PhysicsEngine;
@@ -68,6 +69,7 @@ export class Game {
       clearTimeout(this.aiTimeoutId);
       this.aiTimeoutId = null;
     }
+    this.renderer.clearPenaltyHighlight();
     this.renderer.clearGame();
     this.input.destroy();
   }
@@ -114,29 +116,27 @@ export class Game {
     }, 1000 + Math.random() * 500);
   }
 
-  private triggerAiBallInHand(): void {
+  // AI selects a штрафной ball (takes any non-pocketed ball as penalty)
+  private triggerAiPenaltySelection(): void {
     if (!this.ai) return;
     this.gameState = 'ai_thinking';
-    this.renderer.showMessage('Компьютер ставит биток...', 0);
+    this.renderer.showMessage('Компьютер берёт штрафной шар...', 0);
 
     this.aiTimeoutId = window.setTimeout(() => {
       this.aiTimeoutId = null;
-      const pos = this.ai!.findBallInHandPosition(
-        this.physics.balls, this.physics.pockets
-      );
-      const cue = this.physics.balls[0];
-      cue.pos = pos;
-      cue.isPocketed = false;
-      cue.vel = vec2(0, 0);
-      cue.spin = vec2(0, 0);
-      this.activeBall = cue;
-
-      // Now take a shot
-      this.triggerAiTurn();
+      const available = this.physics.balls.filter(b => !b.isPocketed);
+      if (available.length > 0) {
+        // AI picks a random available ball
+        const chosen = available[Math.floor(Math.random() * available.length)];
+        this.handlePenaltyBallSelected(chosen.id);
+      } else {
+        this.startTurn();
+      }
     }, 800);
   }
 
   private setupInputCallbacks(): void {
+    // Which ball to use as биток (striker)
     this.input.findBallAtScreen = (screenPos: Vec2): Vec2 | null => {
       if (this.gameState !== 'waiting' || this.isAiTurn()) return null;
 
@@ -151,6 +151,23 @@ export class Game {
         if (dist < hitRadius) {
           this.activeBall = ball;
           return ballScreen;
+        }
+      }
+      return null;
+    };
+
+    // Which ball to take as штрафной during penalty selection
+    this.input.findBallIdAtScreen = (screenPos: Vec2): number | null => {
+      if (this.gameState !== 'penalty_selection' || this.isAiTurn()) return null;
+
+      const hitRadius = Math.max(30, BALL_RADIUS * this.renderer.camZoom + 20);
+
+      for (const ball of this.physics.balls) {
+        if (ball.isPocketed) continue;
+        const ballScreen = this.renderer.tableToScreen(ball.pos.x, ball.pos.y);
+        const dist = vecLen(vecSub(screenPos, ballScreen));
+        if (dist < hitRadius) {
+          return ball.id;
         }
       }
       return null;
@@ -178,9 +195,7 @@ export class Game {
       this.renderer.drawPowerBar(0);
     };
 
-    this.input.onCancelAim = () => {
-      // Nothing special needed, input already clears aim line
-    };
+    this.input.onCancelAim = () => {};
 
     this.input.onAimUpdate = (direction, power) => {
       if (this.gameState !== 'waiting') return;
@@ -192,34 +207,9 @@ export class Game {
       this.renderer.drawPowerBar(power);
     };
 
-    this.input.onBallInHandPlace = (pos) => {
-      if (this.gameState !== 'ball_in_hand') return;
-
-      const cue = this.physics.balls[0];
-      const placeX = Math.max(BALL_RADIUS, Math.min(TABLE_WIDTH - BALL_RADIUS, pos.x));
-      const placeY = Math.max(BALL_RADIUS, Math.min(TABLE_HEIGHT - BALL_RADIUS, pos.y));
-
-      let valid = true;
-      for (const ball of this.physics.balls) {
-        if (ball.isPocketed || ball.id === 0) continue;
-        if (vecLen(vecSub(vec2(placeX, placeY), ball.pos)) < BALL_RADIUS * 2.5) {
-          valid = false;
-          break;
-        }
-      }
-
-      if (valid) {
-        cue.pos = vec2(placeX, placeY);
-        cue.isPocketed = false;
-        cue.vel = vec2(0, 0);
-        cue.spin = vec2(0, 0);
-        this.activeBall = cue;
-        this.gameState = 'waiting';
-        this.input.resetToIdle();
-        this.renderer.showMessage('Биток установлен', 1500);
-      } else {
-        this.renderer.showMessage('Нельзя поставить здесь!', 1500);
-      }
+    // Callback when opponent selects a штрафной ball
+    this.input.onPenaltyBallSelect = (ballId: number) => {
+      this.handlePenaltyBallSelected(ballId);
     };
   }
 
@@ -235,15 +225,38 @@ export class Game {
 
   private onTurnEnd(): void {
     const pocketed = this.physics.pocketedThisTurn;
+    const hadContact = this.physics.firstHitBallId !== -1;
+    // Valid shot (правильный удар, п.20): биток коснулся прицельного И
+    // после касания хотя бы один шар упал в лузу ИЛИ коснулся борта
+    const hadResultAfterContact = pocketed.length > 0 || this.physics.cushionHitsAfterContact > 0;
+    const isValidShot = hadContact && hadResultAfterContact;
 
-    // Foul: no ball was hit at all
-    if (pocketed.length === 0 && this.physics.firstHitBallId === -1) {
-      this.renderer.showMessage('Фол! Нет касания', 2500);
+    if (!isValidShot) {
+      // ФОЛ — штраф: неправильно забитые шары возвращаются,
+      // соперник снимает любой шар со стола (штрафной шар)
+      const foulMsg = !hadContact
+        ? 'Фол! Нет касания прицельного шара'
+        : 'Фол! После касания нет результата';
+
+      // Вернуть неправильно забитые шары на стол
+      if (pocketed.length > 0) {
+        this.returnBallsToTable(pocketed);
+      }
+
+      // Передать ход сопернику
       this.switchPlayer();
-      this.startTurn();
+      this.renderer.showMessage(foulMsg, 2000);
+
+      // Заблокировать ввод на время сообщения, потом — выбор штрафного шара
+      this.gameState = 'ai_thinking';
+      this.aiTimeoutId = window.setTimeout(() => {
+        this.aiTimeoutId = null;
+        this.enterPenaltySelection();
+      }, 2000);
       return;
     }
 
+    // Правильный удар: засчитать все забитые шары
     if (pocketed.length > 0) {
       for (const id of pocketed) {
         this.pocketedByPlayer[this.currentPlayer - 1].push(id);
@@ -255,12 +268,12 @@ export class Game {
         this.mode === 'vs_computer'
       );
 
-      const playerName = this.isAiTurn() ? 'Компьютер' : `Игрок ${this.currentPlayer}`;
+      const playerName = this.isAiTurn() ? 'Компьютер' : (this.mode === 'vs_computer' ? 'Вы' : `Игрок ${this.currentPlayer}`);
       const count = pocketed.length;
       const word = count === 1 ? 'шар' : (count < 5 ? 'шара' : 'шаров');
       this.renderer.showMessage(`${playerName}: +${count} ${word}!`, 2000);
 
-      // Check win (first to 8)
+      // Проверка победы (8 очков)
       if (this.pocketedByPlayer[this.currentPlayer - 1].length >= 8) {
         this.gameState = 'game_over';
         const winner = this.isAiTurn() ? 'Компьютер победил!' : 'Вы победили!';
@@ -270,35 +283,134 @@ export class Game {
         return;
       }
 
-      // If cue ball (id=0) was pocketed, need to place it back
-      const cue = this.physics.balls[0];
-      if (cue.isPocketed) {
-        cue.isPocketed = false;
-        cue.pos = vec2(TABLE_WIDTH * 0.25, TABLE_HEIGHT / 2);
-        cue.vel = vec2(0, 0);
-        cue.spin = vec2(0, 0);
-
-        if (this.isAiTurn()) {
-          this.triggerAiBallInHand();
-        } else {
-          this.gameState = 'ball_in_hand';
-          this.input.enableBallInHand();
-          this.renderer.showMessage('Поставьте биток', 0);
-        }
-        return;
-      }
-
-      // Player scored — continues shooting
+      // Забитые шары → продолжить ход (право выбора битка)
       this.continueTurn();
     } else {
-      // Nothing pocketed — switch player
+      // Правильный удар, ничего не забито → смена хода
       this.switchPlayer();
       this.startTurn();
     }
   }
 
+  // Выставить шары обратно на стол после фола (п.25 Общих правил)
+  private returnBallsToTable(ballIds: number[]): void {
+    const baseX = TABLE_WIDTH * 0.73; // зона пирамиды
+    const baseY = TABLE_HEIGHT / 2;
+
+    for (let i = 0; i < ballIds.length; i++) {
+      const ball = this.physics.balls.find(b => b.id === ballIds[i]);
+      if (!ball) continue;
+
+      let placed = false;
+      for (let attempt = 0; attempt < 64 && !placed; attempt++) {
+        const angle = (attempt / 8) * Math.PI * 2;
+        const radius = (Math.floor(attempt / 8) + 1) * BALL_RADIUS * 2.5;
+        const x = Math.max(BALL_RADIUS, Math.min(TABLE_WIDTH - BALL_RADIUS, baseX + Math.cos(angle) * radius));
+        const y = Math.max(BALL_RADIUS, Math.min(TABLE_HEIGHT - BALL_RADIUS, baseY + Math.sin(angle) * radius));
+
+        let overlap = false;
+        for (const other of this.physics.balls) {
+          if (other.isPocketed || other.id === ball.id) continue;
+          const dx = other.pos.x - x;
+          const dy = other.pos.y - y;
+          if (Math.sqrt(dx * dx + dy * dy) < BALL_RADIUS * 2.2) {
+            overlap = true;
+            break;
+          }
+        }
+
+        if (!overlap) {
+          ball.pos = vec2(x, y);
+          ball.isPocketed = false;
+          ball.vel = vec2(0, 0);
+          ball.spin = vec2(0, 0);
+          placed = true;
+        }
+      }
+
+      if (!placed) {
+        ball.pos = vec2(Math.min(TABLE_WIDTH - BALL_RADIUS, baseX + i * BALL_RADIUS * 3), baseY);
+        ball.isPocketed = false;
+        ball.vel = vec2(0, 0);
+        ball.spin = vec2(0, 0);
+      }
+    }
+  }
+
+  // Соперник выбирает штрафной шар (п.6 Свободной пирамиды)
+  private enterPenaltySelection(): void {
+    if (this.gameState === 'game_over') return;
+
+    const available = this.physics.balls.filter(b => !b.isPocketed);
+    if (available.length === 0) {
+      this.startTurn();
+      return;
+    }
+
+    if (this.isAiTurn()) {
+      this.triggerAiPenaltySelection();
+    } else {
+      this.gameState = 'penalty_selection';
+      this.input.enablePenaltySelection();
+      this.renderer.drawPenaltyHighlight(this.physics.balls);
+      const playerName = this.mode === 'vs_computer' ? 'Вы' : `Игрок ${this.currentPlayer}`;
+      this.renderer.showMessage(`${playerName}: выберите штрафной шар`, 0);
+    }
+  }
+
+  // Обработка выбора штрафного шара
+  private handlePenaltyBallSelected(ballId: number): void {
+    if (this.gameState === 'game_over') return;
+
+    const ball = this.physics.balls.find(b => b.id === ballId);
+    if (!ball || ball.isPocketed) return;
+
+    this.renderer.clearPenaltyHighlight();
+
+    // Снять шар со стола, занести на полку победителя (+1 очко)
+    ball.isPocketed = true;
+    ball.pos = vec2(-100, -100);
+    ball.vel = vec2(0, 0);
+    ball.spin = vec2(0, 0);
+
+    this.pocketedByPlayer[this.currentPlayer - 1].push(ballId);
+    this.renderer.updatePocketed(
+      this.pocketedByPlayer[0],
+      this.pocketedByPlayer[1],
+      this.mode === 'vs_computer'
+    );
+
+    const playerName = this.isAiTurn() ? 'Компьютер' : (this.mode === 'vs_computer' ? 'Вы' : `Игрок ${this.currentPlayer}`);
+    this.renderer.showMessage(`${playerName} взял штрафной шар! +1 очко`, 2000);
+
+    // Проверка победы
+    if (this.pocketedByPlayer[this.currentPlayer - 1].length >= 8) {
+      this.gameState = 'game_over';
+      const winner = this.isAiTurn() ? 'Компьютер победил!' : 'Вы победили!';
+      const winMsg = this.mode === 'vs_computer' ? winner : `Игрок ${this.currentPlayer} победил!`;
+      this.renderer.showMessage(winMsg, 0);
+      setTimeout(() => this.resetGame(), 5000);
+      return;
+    }
+
+    // После получения штрафного — текущий игрок бьёт
+    this.gameState = 'ai_thinking';
+    this.aiTimeoutId = window.setTimeout(() => {
+      this.aiTimeoutId = null;
+      this.startTurn();
+    }, 2000);
+  }
+
+  // Найти первый доступный шар (предпочтительно желтый биток)
+  private getDefaultActiveBall(): Ball {
+    const cue = this.physics.balls[0];
+    if (!cue.isPocketed) return cue;
+    return this.physics.balls.find(b => !b.isPocketed) || cue;
+  }
+
   private startTurn(): void {
-    this.activeBall = this.physics.balls[0];
+    this.renderer.clearPenaltyHighlight();
+    this.activeBall = this.getDefaultActiveBall();
     if (this.isAiTurn()) {
       this.triggerAiTurn();
     } else {
@@ -308,7 +420,8 @@ export class Game {
   }
 
   private continueTurn(): void {
-    this.activeBall = this.physics.balls[0];
+    this.renderer.clearPenaltyHighlight();
+    this.activeBall = this.getDefaultActiveBall();
     if (this.isAiTurn()) {
       this.triggerAiTurn();
     } else {

@@ -188,6 +188,8 @@ export class PhysicsEngine {
   pocketedThisTurn: number[] = [];
   firstHitBallId: number = -1;
   cushionHits: number = 0;
+  firstContactMade: boolean = false;
+  cushionHitsAfterContact: number = 0;
   activeBallId: number = 0; // which ball is being struck (any ball in Russian billiards)
   private substeps = 8;
 
@@ -200,6 +202,8 @@ export class PhysicsEngine {
     this.pocketedThisTurn = [];
     this.firstHitBallId = -1;
     this.cushionHits = 0;
+    this.firstContactMade = false;
+    this.cushionHitsAfterContact = 0;
   }
 
   update(dt: number): void {
@@ -272,8 +276,13 @@ export class PhysicsEngine {
         if (dist < minDist) {
           // Track first hit for the active (struck) ball
           if (this.firstHitBallId === -1) {
-            if (a.id === this.activeBallId) this.firstHitBallId = b.id;
-            else if (b.id === this.activeBallId) this.firstHitBallId = a.id;
+            if (a.id === this.activeBallId) {
+              this.firstHitBallId = b.id;
+              this.firstContactMade = true;
+            } else if (b.id === this.activeBallId) {
+              this.firstHitBallId = a.id;
+              this.firstContactMade = true;
+            }
           }
 
           // Separate overlapping balls
@@ -358,6 +367,7 @@ export class PhysicsEngine {
 
       if (bounced) {
         this.cushionHits++;
+        if (this.firstContactMade) this.cushionHitsAfterContact++;
         // Cushion absorbs some spin
         ball.spin = vecScale(ball.spin, 0.6);
       }
