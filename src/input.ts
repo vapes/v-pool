@@ -255,7 +255,7 @@ export class InputHandler {
       // Check aim adjust arrows first (fine-tune aim by ±0.5°)
       const adjBtn = this.renderer.getAimAdjustButtonAt(pos);
       if (adjBtn !== null) {
-        const step = Math.PI / 360; // 0.5° per tap
+        const step = Math.PI / 1800; // 0.1° per tap
         const angle = Math.atan2(this.aimDirection.y, this.aimDirection.x);
         const newAngle = adjBtn === 'left' ? angle - step : angle + step;
         this.aimDirection = vec2(Math.cos(newAngle), Math.sin(newAngle));
