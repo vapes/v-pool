@@ -398,16 +398,27 @@ export class Renderer {
   // Soft elliptical drop-shadow texture
   private getShadowTex(): PIXI.Texture {
     if (this.shadowTex) return this.shadowTex;
-    const W = 128, H = 56;
+    // Canvas is 2:1 — the circle gets scaled into an ellipse that
+    // exactly fills the canvas, so the gradient fades to 0 at every edge
+    // with no hard rectangular clip.
+    const W = 160, H = 80;
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d')!;
-    const grad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W / 2);
-    grad.addColorStop(0,    'rgba(0,0,0,0.48)');
-    grad.addColorStop(0.55, 'rgba(0,0,0,0.18)');
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(1, H / W); // squish circle into ellipse
+    const r = W / 2;
+    const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    grad.addColorStop(0,    'rgba(0,0,0,0.52)');
+    grad.addColorStop(0.5,  'rgba(0,0,0,0.22)');
+    grad.addColorStop(0.82, 'rgba(0,0,0,0.06)');
     grad.addColorStop(1,    'rgba(0,0,0,0)');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
     this.shadowTex = new PIXI.Texture(new PIXI.BaseTexture(canvas));
     return this.shadowTex;
   }
