@@ -42,6 +42,8 @@ export class Renderer {
     right: { x: 0, y: 0, r: 40 },
   };
   private aimAdjustVisible = false;
+  private ballTexCache: Map<number, PIXI.Texture> = new Map();
+  private shadowTex: PIXI.Texture | null = null;
 
   // Camera state
   camX: number = 0;
@@ -307,29 +309,27 @@ export class Renderer {
     for (const ball of balls) {
       const container = new PIXI.Container();
 
-      const shadow = new PIXI.Graphics();
-      shadow.beginFill(0x000000, 0.3);
-      shadow.drawEllipse(3, 3, ball.radius * 0.95, ball.radius * 0.85);
-      shadow.endFill();
-      container.addChild(shadow);
+      // Soft drop-shadow (ellipse, offset bottom-right)
+      const shadowSpr = new PIXI.Sprite(this.getShadowTex());
+      shadowSpr.anchor.set(0.5, 0.5);
+      shadowSpr.width  = ball.radius * 2.7;
+      shadowSpr.height = ball.radius * 1.35;
+      shadowSpr.x = ball.radius * 0.2;
+      shadowSpr.y = ball.radius * 0.28;
+      container.addChild(shadowSpr);
 
-      const gfx = new PIXI.Graphics();
-      const color = ball.isCue ? CUE_BALL_COLOR : BALL_COLOR;
-      gfx.beginFill(color);
-      gfx.drawCircle(0, 0, ball.radius);
-      gfx.endFill();
-
-      const highlight = new PIXI.Graphics();
-      highlight.beginFill(0xFFFFFF, 0.4);
-      highlight.drawEllipse(-ball.radius * 0.3, -ball.radius * 0.3, ball.radius * 0.35, ball.radius * 0.3);
-      highlight.endFill();
-      gfx.addChild(highlight);
-      container.addChild(gfx);
+      // Ball body: radial gradient + specular + rim
+      const ballColor = ball.isCue ? CUE_BALL_COLOR : BALL_COLOR;
+      const ballSpr = new PIXI.Sprite(this.getBallTex(ballColor));
+      ballSpr.anchor.set(0.5, 0.5);
+      ballSpr.width  = ball.radius * 2;
+      ballSpr.height = ball.radius * 2;
+      container.addChild(ballSpr);
 
       if (!ball.isCue) {
         const numText = new PIXI.Text(ball.id.toString(), {
-          fontSize: ball.radius * 0.9,
-          fill: 0x333333,
+          fontSize: ball.radius * 0.85,
+          fill: 0x2a2a2a,
           fontWeight: 'bold',
           fontFamily: 'Arial',
         });
@@ -343,6 +343,73 @@ export class Renderer {
     }
     // Highlight layer on top of all balls (for penalty selection)
     this.tableContainer.addChild(this.penaltyHighlight);
+  }
+
+  // Radial-gradient ball texture rendered onto an offscreen canvas
+  private getBallTex(color: number): PIXI.Texture {
+    if (this.ballTexCache.has(color)) return this.ballTexCache.get(color)!;
+
+    const S = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = S; canvas.height = S;
+    const ctx = canvas.getContext('2d')!;
+    const cx = S / 2, cy = S / 2, r = S / 2 - 2;
+
+    const cr = (color >> 16) & 0xFF;
+    const cg = (color >> 8)  & 0xFF;
+    const cb =  color        & 0xFF;
+    const hi = (c: number) => Math.min(255, c + 68);
+    const lo = (c: number) => Math.max(0,   c - 80);
+
+    // ① Diffuse gradient: bright top-left → dark bottom-right
+    const diff = ctx.createRadialGradient(
+      cx - r * 0.27, cy - r * 0.30, r * 0.04,
+      cx + r * 0.08, cy + r * 0.08, r * 1.02,
+    );
+    diff.addColorStop(0,   `rgb(${hi(cr)},${hi(cg)},${hi(cb)})`);
+    diff.addColorStop(0.5, `rgb(${cr},${cg},${cb})`);
+    diff.addColorStop(1,   `rgb(${lo(cr)},${lo(cg)},${lo(cb)})`);
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = diff; ctx.fill();
+
+    // ② Specular highlight (white glow, top-left)
+    const spec = ctx.createRadialGradient(
+      cx - r * 0.27, cy - r * 0.30, 0,
+      cx - r * 0.27, cy - r * 0.30, r * 0.46,
+    );
+    spec.addColorStop(0,    'rgba(255,255,255,0.85)');
+    spec.addColorStop(0.35, 'rgba(255,255,255,0.28)');
+    spec.addColorStop(1,    'rgba(255,255,255,0)');
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = spec; ctx.fill();
+
+    // ③ Rim darkening for depth
+    const rim = ctx.createRadialGradient(cx, cy, r * 0.70, cx, cy, r);
+    rim.addColorStop(0, 'rgba(0,0,0,0)');
+    rim.addColorStop(1, 'rgba(0,0,0,0.42)');
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = rim; ctx.fill();
+
+    const tex = new PIXI.Texture(new PIXI.BaseTexture(canvas));
+    this.ballTexCache.set(color, tex);
+    return tex;
+  }
+
+  // Soft elliptical drop-shadow texture
+  private getShadowTex(): PIXI.Texture {
+    if (this.shadowTex) return this.shadowTex;
+    const W = 128, H = 56;
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W / 2);
+    grad.addColorStop(0,    'rgba(0,0,0,0.48)');
+    grad.addColorStop(0.55, 'rgba(0,0,0,0.18)');
+    grad.addColorStop(1,    'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    this.shadowTex = new PIXI.Texture(new PIXI.BaseTexture(canvas));
+    return this.shadowTex;
   }
 
   updateBalls(balls: Ball[]): void {
